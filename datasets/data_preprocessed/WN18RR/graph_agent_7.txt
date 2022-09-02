@@ -1,0 +1,17 @@
+13423489	_derivationally_related_form	00275466
+12327407	__member_meronym	12327209
+01686956	_derivationally_related_form	05766984
+02234781	_derivationally_related_form	00329031
+01984958	_member_meronym	01985667
+02114924	_hypernym	00126264
+01182709	__hypernym	01180351
+00958334	__derivationally_related_form	01019129
+00393369	__hypernym	00669000
+01865197	_also_see	02331262
+10244913	_hypernym	09770949
+11719468	_member_meronym	11728350
+00740053	__derivationally_related_form	00164345
+14015361	_derivationally_related_form	01834485
+06781581	_derivationally_related_form	10493093
+00434075	_derivationally_related_form	00100235
+11965627	__member_meronym	11965378
