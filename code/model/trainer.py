@@ -1234,9 +1234,27 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
     count = 0
     j = agent_training_order[order_idx][agent_idx] - 1
     train_environment = env(options, agent_names[j])
+    # 初始空set装所有用过的
+    used_entities_value_set = set()
     for episode_handovers in episode_handover_for_agent:
         for I, handover in episode_handover_for_agent[episode_handovers]:
-            action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
+            # 深拷贝，不影响原数据
+            np_tmp_1x1700 = copy.deepcopy(handover['current_entities'])  # 1*1700
+            # 不重复的重新组数据
+            handled_entities = []
+            for i in np_tmp_1x1700:
+                # 不重复原值 重复给0
+                tmp_entities = i if i not in used_entities_value_set else 0
+                handled_entities.append(tmp_entities)
+                used_entities_value_set.add(i)
+            # 转回np数组不影响后续
+            handled_entities = np.array(handled_entities)
+            # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
+            action_entity = train_environment.grapher.array_store[handled_entities,:,:]
+            np_1 = handover['current_entities']
+            np_2 = handled_entities
+            print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
+            print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
 
             for current_entity in action_entity:
                 for action in current_entity:
