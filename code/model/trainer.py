@@ -1,6 +1,8 @@
 from __future__ import absolute_import
 from __future__ import division
 
+import random
+
 from tensorflow.python.ops.rnn_cell_impl import LSTMStateTuple
 from tqdm import tqdm
 import json
@@ -987,13 +989,22 @@ def train_multi_agents_with_transfer(options, agent_names, agent_training_order,
 
     return evaluation, batch_loss, memory_use
 
-def train_multi_agents_with_handover_query(options, agent_names, agent_training_order, triple_count_max=None, iter=None, sorted=False):
+def train_multi_agents_with_handover_query(options, agent_names, agent_training_order, agent_training_non_coo=None,triple_count_max=None, iter=None,
+                                           sorted_flag=False, sorted_flag_with_non_coo=False, more_loop_count=0):
     episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
     ho_count = {}
     ho_ratio = {}
+    # agent_training_order = {
+    #         #1: [1, 2, 3],
+    #         #2: [1, 3, 2],
+    #         #3: [2, 3, 1],
+    #         4: [2, 1, 3],
+    #         #5: [3, 1, 2],
+    #         #6: [3, 2, 1]
+    #     }
     for agent_order in agent_training_order:
         evaluation[agent_order] = {}
         batch_loss[agent_order] = {}
@@ -1037,38 +1048,108 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         evaluation[agent_order][agent_names[i] + iter_string] = score
         batch_loss[agent_order][agent_names[i] + iter_string] = batch_loss_for_agent
         memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
+        sorted_flag = sorted_flag
+        sorted_flag_with_non_coo = sorted_flag_with_non_coo
+        agent_training_non_coo = agent_training_non_coo
 
-        if sorted:
+        if sorted_flag:
+            print("sorted_flag:", sorted_flag)
             counts = []
             for idx in range(len(agent_training_order[agent_order])):
 
                 count = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
                                          episode_handover_for_agent)
                 if idx == 0:
-                    ho_count[agent_order][agent_names[idx]] = count
+                    ho_count[agent_order][agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 else:
                     ho_count[agent_order]["continued on " + agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 counts.append(count)
                 #print(count)
 
-            base = 0
             query_ratio = {}
             for c in range(len(counts)):
+                query_ratio[counts[c]] = c
                 if c == 0:
-                    base = counts[c]
-                    query_ratio[counts[c]/base] = c
-                    ho_ratio[agent_order][agent_names[c]] = counts[c]/base
+                    ho_ratio[agent_order][agent_names[agent_training_order[agent_order][c] - 1]] = counts[c]
                 else:
-                    query_ratio[counts[c] / base] = c
-                    ho_ratio[agent_order]["continued on " + agent_names[agent_training_order[agent_order][c] - 1]] = counts[c] / base
+                    ho_ratio[agent_order]["continued on " + agent_names[agent_training_order[agent_order][c] - 1]] = counts[c]
 
             sorted(query_ratio.keys())
-            for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
-                if query_ratio[q_r_sorted] == 0:
-                    continue
-                continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
-                                                  episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path,
-                                                  config)
+            print("counts:", counts)
+            print("query_ratio:", query_ratio)
+            print("sorted(query_ratio.keys(), reverse=True):", sorted(query_ratio.keys(), reverse=True))
+            if sorted_flag_with_non_coo:
+                # agent_training_non_coo = {
+                #         1: [3], # 不合作的
+                #         2: [2],
+                #         3: [3],
+                #         4: [1],
+                #         5: [2],
+                #         6: [1]
+                #         # 4: [4, 1, 2, 3, 5, 6, 7, 8],
+                #         # 5: [5, 1, 2, 3, 4, 6, 7, 8],
+                #         # 6: [6, 1, 2, 3, 4, 5, 7, 8],
+                #         # 7: [7, 1, 2, 3, 4, 5, 6, 8],
+                #         # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+                #     }
+
+                while query_ratio:  # 合作的训练完就算结束
+                    agent_key_with_max_auc = max(query_ratio)
+                    if query_ratio[agent_key_with_max_auc] == 0:
+                        # 去除打头的agent
+                        del query_ratio[agent_key_with_max_auc]
+                        continue
+                    else:
+                        # 还有未训练的合作的agent
+                        # 不合作的举手数量 示例：5个agent 有可能 0，1，2，3，4，5个举手的，相当于range(6)
+                        # 与下面的竞争搭配后，相当于大家举手完全独立随机
+                        hands_up_count = random.choice(range(len(agent_training_non_coo[agent_order])+1))
+                        # 先拿出来不合作的举手的agent列表
+                        non_coo_whit_hands_up = random.choices(agent_training_non_coo[agent_order], k=hands_up_count)
+                        # 信心值最大的 与 举手的不合作的竞争 概率拉平随机拿一个
+                        coo_inx = agent_training_order[agent_order][query_ratio[agent_key_with_max_auc]]
+                        choice_agent_idx = random.choice(non_coo_whit_hands_up + [coo_inx])
+                        non_coo = False if choice_agent_idx == coo_inx else True
+                        continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
+                                                              choice_agent_idx,
+                                                              episode_handover_for_agent, evaluation, batch_loss,
+                                                              memory_use, save_path,
+                                                              config, whit_non_coo=True, non_coo=non_coo)
+                        if choice_agent_idx == coo_inx:
+                            # 选到了合作的 去掉
+                            del query_ratio[agent_key_with_max_auc]
+                        else:
+                            # 选到了不合作的 去掉
+                            print("agent_training_non_coo:", choice_agent_idx)
+                            agent_training_non_coo[agent_order].remove(choice_agent_idx)
+                more_loop_count = more_loop_count
+                # more_loop_count = 2  # 合作的跑完了后，还有不合作的存在的话，再取两次
+                while more_loop_count and agent_training_non_coo[agent_order]:
+                    more_loop_count -= 1
+                    hands_up_count = random.choice(range(len(agent_training_non_coo[agent_order]) + 1))
+                    non_coo_whit_hands_up = random.choices(agent_training_non_coo[agent_order], k=hands_up_count)
+                    if not non_coo_whit_hands_up:  # 没有举手的
+                        continue
+                    # if not random.choice([0, 1]):  # 没有被选上
+                    #     continue
+                    choice_agent_idx = random.choice(non_coo_whit_hands_up)
+                    continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
+                                                          choice_agent_idx,
+                                                          episode_handover_for_agent, evaluation, batch_loss,
+                                                          memory_use, save_path,
+                                                          config, whit_non_coo=True, non_coo=True)
+                    # 选到了不合作的 去掉
+                    print("agent_training_non_coo:", choice_agent_idx)
+                    agent_training_non_coo[agent_order].remove(choice_agent_idx)
+
+
+            if not sorted_flag_with_non_coo:
+                for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
+                    if query_ratio[q_r_sorted] == 0:
+                        continue
+                    continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
+                                                      episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path,
+                                                      config)
         else:
             for agent_idx in range(len(agent_training_order[agent_order])):
                 if agent_idx == 0:
@@ -1101,13 +1182,22 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
     return evaluation, batch_loss, memory_use, ho_count, ho_ratio
 
-def continue_training_with_handover_query(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path, config):
+def continue_training_with_handover_query(options, agent_names, agent_training_order, order_idx, agent_idx,
+                                          episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path, config,
+                                          whit_non_coo=False, non_coo=False):
+    # query_ratio
+
 
     p = ""
     # for idx in range(len(agent_training_order[order_idx])):
     #     if idx == 0:
     #         continue
-    j = agent_training_order[order_idx][agent_idx] - 1
+    # 取索引有两种方式
+    if whit_non_coo:
+        # 有不合作的
+        j = agent_idx - 1
+    else:
+        j = agent_training_order[order_idx][agent_idx] - 1
 
     trainer = Trainer(options, agent_names[j], isTrainHandover=True)
 
@@ -1128,9 +1218,14 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
     tf.compat.v1.reset_default_graph()
     if save_path:
         score = test_auc(options, save_path, path_logger_file, output_dir)
-        evaluation[order_idx]["continued on " + agent_names[j]] = score
-        batch_loss[order_idx]["continued on " + agent_names[j]] = batch_loss_for_agent
-        memory_use[order_idx]["continued on " + agent_names[j]] = memory_use_for_agent
+        if not non_coo:
+            evaluation[order_idx]["continued on " + agent_names[j]] = score
+            batch_loss[order_idx]["continued on " + agent_names[j]] = batch_loss_for_agent
+            memory_use[order_idx]["continued on " + agent_names[j]] = memory_use_for_agent
+        else:
+            evaluation[order_idx]["continued on non_coo " + agent_names[j]] = score
+            batch_loss[order_idx]["continued on non_coo " + agent_names[j]] = batch_loss_for_agent
+            memory_use[order_idx]["continued on non_coo " + agent_names[j]] = memory_use_for_agent
 
     return evaluation, batch_loss, memory_use
 
@@ -1152,7 +1247,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
 
 
 def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count = None, ho_ratio = None):
-    with open(options['output_dir'] + '/test/scores.csv', 'w') as evaluation_score:
+    with open(options['output_dir'] + '/test/8_8scores.csv', 'w') as evaluation_score:
         writer = csv.writer(evaluation_score, delimiter=',')
         writer.writerow(
             ["item", "triple_count", "entity_count", "relation_count", "ho_count", "ho_ratio", "Hits@1", "Hits@3", "Hits@5", "Hits@10",
@@ -1217,13 +1312,13 @@ if __name__ == '__main__':
     options = read_options("test_multi_agent_" + time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time())))
 
     if options['distributed_training']:
-        agent_names = ['agent_1', 'agent_2', 'agent_3']
-        #agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        # agent_names = ['agent_1', 'agent_2', 'agent_3']
+        agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
     else:
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    #data_splitter.split(options, agent_names)
+    # data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1254,14 +1349,82 @@ if __name__ == '__main__':
     triple_count_array = [100, 200, 300, 400, 500, 600, 700, 800, 900]
     #triple_count_array = [100]
 
-    agent_training_order = {
-        #1: [1, 2, 3],
-        #2: [1, 3, 2],
-        #3: [2, 3, 1],
-        4: [2, 1, 3],
-        #5: [3, 1, 2],
-        #6: [3, 2, 1]
-    }
+    # 2后随机挑1个合作的，其余为不合作的，跑第一次 如 [2, 1]+[3, 4, 5, 6, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑1个合作的，其余为不合作的，跑第二次 如 [2, 6]+[1, 3, 4, 5, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑2个合作的，其余为不合作的，跑第一次 如 [2, 1, 8]+[3, 4, 5, 6, 7] agent_training_order + agent_training_non_coo
+    # 2后随机挑2个合作的，其余为不合作的，跑第二次 如 [2, 3, 4]+[1, 5, 6, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑3个合作的，其余为不合作的，跑第一次 如 [2, 3, 6, 8]+[1, 5, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6]+[3, 4, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5]+[6, 7, 8] agent_training_order + agent_training_non_coo
+    # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8]+[1, 4, 6] agent_training_order + agent_training_non_coo
+    # 挑n个合作的，n一般 <= count(agent)-1，如8个agent，n一般小于等于7
+    # 跑x次
+    agent_training_order = {}  # 头部+后续合作的
+    agent_training_non_coo = {}  # 不合作的
+    coo_count_loop = [1, 2, 3, 4]  # 每次挑出n个合作的情况
+    order_start_idx = 1  # 起始索引：agent_training_order 和 agent_training_non_coo 的
+    batch_count = 2  # 跑x次
+    start_agent = 2  # 起始agent：agent_training_order的
+    other_agent = [1, 3, 4, 5, 6, 7, 8]
+    for coo_count in coo_count_loop:  # 每次挑出n个合作的情况
+        for i in range(batch_count):  # 跑x次
+            random.shuffle(other_agent)  # 每次打乱，取前n个作为合作的，剩下为不合作的
+            # 取前n个作为合作的, sorted 排序下比较好看些
+            agent_training_order[order_start_idx] = [start_agent] + sorted(other_agent[:coo_count])
+            # 剩下为不合作的, sorted 排序下比较好看些
+            agent_training_non_coo[order_start_idx] = sorted(other_agent[coo_count:])
+            order_start_idx += 1
+    print("agent_training_order:")
+    for k_, v_ in agent_training_order.items():
+        print(k_, ":", v_)
+    print("agent_training_non_coo:")
+    for k_, v_ in agent_training_non_coo.items():
+        print(k_, ":", v_)
+
+
+
+    # agent_training_order = {
+    #     # 1: [1, 2, 3, 4], # 头部+后续合作的
+    #     # 2: [2, 1, 3, 4],
+    #     # 3: [3, 1, 2, 4],
+    #     # 4: [4, 1, 2, 3],
+    #     # 5: [5, 6, 7, 8],
+    #     # 6: [6, 5, 7, 8],
+    #     # 7: [7, 5, 6, 8],
+    #     # 8: [8, 5, 6, 7],
+    #     1: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑1个合作的，其余为不合作的，跑第一次 如 [2, 1] [3, 4, 5, 6, 7, 8]
+    #     2: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑1个合作的，其余为不合作的，跑第二次 如 [2, 6] [1, 3, 4, 5, 7, 8]
+    #     3: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑2个合作的，其余为不合作的，跑第一次 如 [2, 1, 8] [3, 4, 5, 6, 7]
+    #     4: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑2个合作的，其余为不合作的，跑第二次 如 [2, 3, 4] [1, 5, 6, 7, 8]
+    #     5: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第一次 如 [2, 3, 6, 8] [1, 5, 7, 8]
+    #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
+    #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
+    #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
+    #     # 1: [1, 2, 3, 4, 5, 6, 7, 8],
+    #     # 2: [2, 1, 3, 4, 5, 6, 7, 8],
+    #     # 3: [3, 1, 2, 4, 5, 6, 7, 8],
+    #     # 4: [4, 1, 2, 3, 4, 5, 7, 8],
+    #     # 5: [5, 1, 2, 3, 4, 6, 7, 8],
+    #     # 6: [6, 1, 2, 3, 4, 5, 7, 8],
+    #     # 7: [7, 1, 2, 3, 4, 5, 6, 8],
+    #     # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+    # }
+    #
+    # agent_training_non_coo = {
+    #     1: [5, 6, 7, 8], # 不合作的
+    #     2: [5, 6, 7, 8],
+    #     3: [5, 6, 7, 8],
+    #     4: [5, 6, 7, 8],
+    #     5: [1, 2, 3, 4],
+    #     6: [1, 2, 3, 4],
+    #     7: [1, 2, 3, 4],
+    #     8: [1, 2, 3, 4]
+    #     # 4: [4, 1, 2, 3, 5, 6, 7, 8],
+    #     # 5: [5, 1, 2, 3, 4, 6, 7, 8],
+    #     # 6: [6, 1, 2, 3, 4, 5, 7, 8],
+    #     # 7: [7, 1, 2, 3, 4, 5, 6, 8],
+    #     # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+    # }
 
     # Training
     # 不直接读取模型
@@ -1290,11 +1453,16 @@ if __name__ == '__main__':
 
             print(cal_trainable_variables)
 
-
+        # sorted_flag 按信心值大到小排序训练
+        # sorted_flag_with_non_coo 按信息值排序+带不合作的agent，为true时必须带上 agent_training_non_coo
+        # agent_training_non_coo 不合作的agent节点
         if options['transferred_training']:
+            more_loop_count = 2  # 跑完合作的之后，再跑n轮不合作的
             #evaluation, batch_loss, memory_use = train_multi_agents_with_transfer(options,agent_names, agent_training_order)
-            evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options, agent_names,
-                                                                                  agent_training_order)
+            evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options,
+                                                                agent_names, agent_training_order, sorted_flag=True,
+                                                                agent_training_non_coo=agent_training_non_coo,
+                                                                sorted_flag_with_non_coo=True, more_loop_count=more_loop_count)
             save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
 
     # 直接读取模型

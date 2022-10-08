@@ -74,36 +74,103 @@ class DataDistributor:
     def split_grapher_triple_random(self, params, agent_names):
         with open(params['data_input_dir'] + '/' + 'graph.txt') as triple_file_raw:
             triple_file = list(csv.reader(triple_file_raw, delimiter='\t'))
+            # 打乱数据集
+            random.shuffle(triple_file)
+            # 计算正态分布数据集
+            total_count = len(triple_file)
+            print("total_count", total_count)
+            smoothness = 1000  # 平滑度，n个agent生成正态分布不够平滑，一般给1000倍agent数量的点足够，最后按索引截取即可
+            # 实测方差为1，再经过下面3步变形处理后起伏较为平缓，不突兀
+            normal_sorted = sorted(np.random.normal(0, 1, len(agent_names)*smoothness))
+            target_index_suffix = str(smoothness // 2)  # 每多少个index相间取一个正态值 1000/2=500 '500'
+            index_suffix_long = len(target_index_suffix)  # 判断index 如 500 1500 2500时就拿出来
+            print('index_suffix_long:', index_suffix_long)
+            normal_tmp = [i for i in normal_sorted if str(normal_sorted.index(i))[-index_suffix_long:] == target_index_suffix]
+
+            # normal_tmp
+            # |                         --/
+            # |                     --/
+            # |                --/
+            # 0----------------------
+            # |         --/
+            # |    --/
+            # |--/
+
+            print('normal_tmp:', normal_tmp)
+
+            normal_tmp = [abs(i) for i in normal_tmp]  # 折叠正态分布
+
+            # normal_tmp
+            # |--\                     --/
+            # |    --\             --/
+            # |         --\   --/
+            # 0----------------------
+
+            max_count = int(max(normal_tmp)) + 1  # 找到最大值并进位，
+            normal_tmp = [max_count - i for i in normal_tmp]  # 反转正态分布
+            print('normal_tmp:', normal_tmp)
+
+            # normal_tmp
+            # |          --/   \--
+            # |     --/             \--
+            # | --/                     \--
+            # 0----------------------
+            # 计算每个比例
+            triple_count_per_agent = [i/sum(normal_tmp) for i in normal_tmp]
+            # 计算每个agent总数
+            # 计算完了算出起始索引去切片原数据集，保证不重复的分配
+            normal_count = [int(i*total_count) for i in triple_count_per_agent]
+            print('normal_count:', normal_count)
+            # 170000 大约 8000 19000 26000 30000 30000 26000 19000 8000
+
+
+
 
             self.triple_per_agent = {}
             self.agent_entity_vocab = {}
             self.agent_relation_vocab = {}
-            agent_triple_spilt_param = {}
-            agent_triple_spilt_param[agent_names[0]] = 0.10
-            agent_triple_spilt_param[agent_names[1]] = 0.20
-            agent_triple_spilt_param[agent_names[2]] = 0.30
-
-            for agent in agent_names:
+            # agent_triple_spilt_param = {}
+            # agent_triple_spilt_param[agent_names[0]] = 0.10
+            # agent_triple_spilt_param[agent_names[1]] = 0.20
+            # agent_triple_spilt_param[agent_names[2]] = 0.30
+            start_idx = 0
+            # offset = 0
+            for idx, agent in enumerate(agent_names):
                 print(agent)
-                triple_count_per_agent = int(len(triple_file) * random.random())
-                self.triple_per_agent[agent] = triple_count_per_agent
+                # triple_count_per_agent = int(len(triple_file) * random.random())
+                # 每个agent数据占比
+                self.triple_per_agent[agent] = "{}*{}={}".format(total_count, triple_count_per_agent[idx], normal_count[idx])
+                # 每个agent数据量
                 self.agent_entity_vocab[agent] = []
                 self.agent_relation_vocab[agent] = []
 
+                # 正态分布标准差0
                 with open(params['data_input_dir'] + '/' + 'graph_' + agent + '.txt', 'w') as triple_file_name:
                     writer = csv.writer(triple_file_name, delimiter='\t')
-                    for i in range(triple_count_per_agent):
-                        idx = random.randint(1, len(triple_file) - 1)
+                    # start_idx = 0
+                    offset = normal_count[idx]
+                    end_idx = start_idx + offset
+                    if idx == len(agent_names):
+                        # 防止normal_count中的 比例*总数损失了个别int，最后一位agent的情况取到完为止
+                        end_idx = total_count
+                    for target_line in triple_file[start_idx:end_idx]:
+                        writer.writerow(target_line)
+                    # 不断根据当前数量平移切片的索引
+                    start_idx += offset
 
-                        if not triple_file[idx][0] in self.agent_entity_vocab[agent]:
-                            self.agent_entity_vocab[agent].append(triple_file[idx][0])
-                        if not triple_file[idx][1] in self.agent_relation_vocab[agent]:
-                            self.agent_relation_vocab[agent].append(triple_file[idx][1])
-                        if not triple_file[idx][2] in self.agent_entity_vocab[agent]:
-                            self.agent_entity_vocab[agent].append(triple_file[idx][2])
 
-                        writer.writerow(triple_file[idx])
-                        triple_file.remove(triple_file[idx])
+                    # for i in range(triple_count_per_agent):
+                    #     idx = random.randint(1, len(triple_file) - 1)
+
+                        # if not triple_file[idx][0] in self.agent_entity_vocab[agent]:
+                        #     self.agent_entity_vocab[agent].append(triple_file[idx][0])
+                        # if not triple_file[idx][1] in self.agent_relation_vocab[agent]:
+                        #     self.agent_relation_vocab[agent].append(triple_file[idx][1])
+                        # if not triple_file[idx][2] in self.agent_entity_vocab[agent]:
+                        #     self.agent_entity_vocab[agent].append(triple_file[idx][2])
+
+                        # writer.writerow(triple_file[idx])
+                        # triple_file.remove(triple_file[idx])
 
     def split_grapher_triple_abs_relation(self, params, agent_names):
 
