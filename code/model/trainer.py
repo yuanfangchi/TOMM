@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 from __future__ import division
 
+import copy
 import random
 
 from tensorflow.python.ops.rnn_cell_impl import LSTMStateTuple
@@ -42,6 +43,8 @@ class Trainer(object):
 
         self.agent = Agent(params)
         self.save_path = None
+        self.test_rollouts = None
+        self.path_logger_file_ = None
         self.train_environment = env(params, agent, 'train')
         self.dev_test_environment = env(params, agent, 'dev')
         self.test_test_environment = env(params, agent, 'test')
@@ -359,13 +362,16 @@ class Trainer(object):
             logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
             self.save_path = self.model_saver.save(sess, self.model_dir + "model" + '.ckpt')
 
-            # with open(self.pretrained_embeddings_action_dir, 'w') as out:
-            #     pprint(self.agent.relation_lookup_table, stream=out)
-            # self.pretrained_embeddings_action = self.pretrained_embeddings_action_dir
-            #
-            # with open(self.pretrained_embeddings_entity_dir, 'w') as out:
-            #     pprint(self.agent.entity_lookup_table, stream=out)
-            # self.pretrained_embeddings_entity = self.pretrained_embeddings_entity_dir
+            with open(self.pretrained_embeddings_action_dir, 'w') as out:
+                pprint(self.agent.relation_lookup_table, stream=out)
+            self.pretrained_embeddings_action = self.pretrained_embeddings_action_dir
+
+            with open(self.pretrained_embeddings_entity_dir, 'w') as out:
+                pprint(self.agent.entity_lookup_table, stream=out)
+            self.pretrained_embeddings_entity = self.pretrained_embeddings_entity_dir
+            #  ll pre*
+            #  <tf.Variable 'action_lookup_table/relation_lookup_table:0' shape=(26, 100) dtype=float32>
+            #  <tf.Variable 'entity_lookup_table/entity_lookup_table:0' shape=(40945, 100) dtype=float32>
 
             gc.collect()
             if self.batch_counter >= self.total_iterations:
@@ -898,6 +904,26 @@ def test_auc(options, save_path, path_logger_file, output_dir, data_input_dir=No
 
     tf.compat.v1.reset_default_graph()
     return score
+def test_auc_avg(save_path, path_logger_file, output_dir, trainer, sess, data_input_dir=None):
+    # trainer = Trainer(options)
+
+    # Testing
+    # with tf.compat.v1.Session(config=config) as sess:
+    # trainer.initialize(restore=save_path, sess=sess)
+
+    trainer.test_rollouts = 20
+
+    if not os.path.isdir(path_logger_file + "/" + "test_beam"):
+        os.mkdir(path_logger_file + "/" + "test_beam")
+    trainer.path_logger_file_ = path_logger_file + "/" + "test_beam" + "/paths"
+    with open(output_dir + '/scores.txt', 'a') as score_file:
+        score_file.write("Test (beam) scores with best model from " + save_path + "\n")
+    trainer.test_environment = trainer.test_test_environment
+    trainer.test_environment.test_rollouts = 20
+
+    score = trainer.test(sess, beam=True, print_paths=True, save_model=False)
+    # tf.compat.v1.reset_default_graph()
+    return score
 
 def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
     episode_handovers = {}
@@ -910,6 +936,7 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
     memory_use[1] = {}
     model_path[1] = {}
 
+    ho_count = {1: {}}
     save_path = ""
     for i in range(len(agent_names)):
         trainer = Trainer(options, agent_names[i])
@@ -942,8 +969,15 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
         batch_loss[1][agent_names[i] + iter_string] = batch_loss_for_agent
         memory_use[1][agent_names[i] + iter_string] = memory_use_for_agent
         model_path[1][agent_names[i] + iter_string] = save_path
+        if i == 0:
+            # 打头的计算信心值，后续一并在打头的基础上计算信心值
+            for idx in range(len(agent_names)):
+                count = calc_confident_indicator(options, agent_names, {}, 1, idx,
+                                                 episode_handover_for_agent)
+                ho_count[1][agent_names[idx]] = count
 
-    return evaluation, batch_loss, memory_use, model_path
+
+    return evaluation, batch_loss, memory_use, model_path,ho_count
 
 def train_multi_agents_with_transfer(options, agent_names, agent_training_order, triple_count_max=None, iter=None):
     episode_handovers = {}
@@ -1077,7 +1111,16 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             sorted(query_ratio.keys())
             print("counts:", counts)
             print("query_ratio:", query_ratio)
+            sort_count_list = sorted(query_ratio.keys(), reverse=True)
+            sorted_count_and_agent_name_map = [{count_: agent_training_order[agent_order][query_ratio[count_]]} for count_ in sort_count_list]
+            # 打印排序后 信息值与agent name的对应关系
+            print("query_ratio sorted_count_and_agent_name_map:", sorted_count_and_agent_name_map)
+            for count_agent_name in sorted_count_and_agent_name_map:
+                print("count_agent_name: ", count_agent_name)
             print("sorted(query_ratio.keys(), reverse=True):", sorted(query_ratio.keys(), reverse=True))
+
+            # continue
+            # return evaluation, batch_loss, memory_use, ho_count, ho_ratio
             if sorted_flag_with_non_coo:
                 # agent_training_non_coo = {
                 #         1: [3], # 不合作的
@@ -1144,7 +1187,10 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
 
             if not sorted_flag_with_non_coo:
+                # order_index = query_ratio.keys()
+                # random.shuffle(order_index)
                 for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
+                # for q_r_sorted in order_index:
                     if query_ratio[q_r_sorted] == 0:
                         continue
                     continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
@@ -1232,7 +1278,10 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 def calc_confident_indicator(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent):
 
     count = 0
-    j = agent_training_order[order_idx][agent_idx] - 1
+    if agent_training_order:
+        j = agent_training_order[order_idx][agent_idx] - 1
+    else:
+        j = agent_idx
     train_environment = env(options, agent_names[j])
     # 初始空set装所有用过的
     used_entities_value_set = set()
@@ -1250,16 +1299,32 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
             # 转回np数组不影响后续
             handled_entities = np.array(handled_entities)
             # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
-            action_entity = train_environment.grapher.array_store[handled_entities,:,:]
+            for i in handled_entities:
+                if i:
+                    action_entity = train_environment.grapher.array_store[i,:,:]
+                    if len(action_entity):
+                        # print("action_entity:", action_entity)
+                        for action in action_entity:
+                            if action[0] > 0 and action[1] > 0:
+                                print("action[0] > 0 and action[1] > 0:", action)
+                                count += 1
+                                break
+                    else:
+                        print("len(action_entity) == 0 ", action_entity)
+
             np_1 = handover['current_entities']
             np_2 = handled_entities
             print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
             print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
+            # a = np.array([[[1,2,3,4],[5,6,7,8],[9,10,11,12]], \
+            #               [[13,14,15,16],[17,18,19,20],[21,22,23,24]], \
+            #               [[25,26,27,28],[29,30,31,32],[33,34,35,36]]])
+            # b = np.array([[[],[],[]],[[],[],[]],[[],[],[]]])
 
-            for current_entity in action_entity:
-                for action in current_entity:
-                    if action[0] > 0 and action[1] > 0:
-                        count += 1
+            # for current_entity in action_entity:
+            #     for action in current_entity:
+            #         if action[0] > 0 and action[1] > 0:
+            #             count += 1
 
     return count
 
@@ -1323,6 +1388,49 @@ def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_c
                     row.append(j)
                     row.append(memory_use[round][i][j])
                     writer.writerow(row)
+def save_avg_model_auc_to_excel(evaluation):
+    with open(options['output_dir'] + '/test/8_8scores.csv', 'a') as evaluation_score:
+        writer = csv.writer(evaluation_score, delimiter=',')
+        for round in evaluation:
+            for i in evaluation[round]:
+                row = []
+                row.append(i)
+                for _ in range(5):
+                    row.append("")
+                for v in evaluation[round][i].values():
+                    row.append(v)
+                writer.writerow(row)
+            row = []
+            row.append("line break")
+            writer.writerow(row)
+
+def test_avg_model(agent_name, trainer, sess):
+    episode_handovers = {}
+    evaluation = {}
+    batch_loss = {}
+    memory_use = {}
+    model_path = {}
+    evaluation[1] = {}
+    batch_loss[1] = {}
+    memory_use[1] = {}
+    model_path[1] = {}
+
+    save_path = ""
+    # for i in range(len(agent_names)):
+    # trainer = Trainer(options, agent_names[i])
+    save_path = trainer.save_path if trainer.save_path else ""
+    path_logger_file = trainer.path_logger_file
+    output_dir = trainer.output_dir
+    trainer.test_rollouts = 20
+
+    # tf.compat.v1.reset_default_graph()
+
+    score = test_auc_avg(save_path, path_logger_file, output_dir, trainer, sess)
+    print("avg score:", score)
+    # print("avg score:", score.values())
+
+    evaluation[1][agent_name] = score
+    return evaluation
 
 
 if __name__ == '__main__':
@@ -1331,7 +1439,10 @@ if __name__ == '__main__':
 
     if options['distributed_training']:
         # agent_names = ['agent_1', 'agent_2', 'agent_3']
-        agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        # agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
+        # agent_names = ['agent_1', 'agent_2']
+        # agent_names = ['agent_1', 'agent_5']
     else:
         agent_names = ['agent_full']
 
@@ -1377,31 +1488,31 @@ if __name__ == '__main__':
     # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8]+[1, 4, 6] agent_training_order + agent_training_non_coo
     # 挑n个合作的，n一般 <= count(agent)-1，如8个agent，n一般小于等于7
     # 跑x次
-    agent_training_order = {}  # 头部+后续合作的
+    # agent_training_order = {}  # 头部+后续合作的
     agent_training_non_coo = {}  # 不合作的
-    coo_count_loop = [1, 2, 3, 4]  # 每次挑出n个合作的情况
-    order_start_idx = 1  # 起始索引：agent_training_order 和 agent_training_non_coo 的
-    batch_count = 2  # 跑x次
-    start_agent = 2  # 起始agent：agent_training_order的
-    other_agent = [1, 3, 4, 5, 6, 7, 8]
-    for coo_count in coo_count_loop:  # 每次挑出n个合作的情况
-        for i in range(batch_count):  # 跑x次
-            random.shuffle(other_agent)  # 每次打乱，取前n个作为合作的，剩下为不合作的
-            # 取前n个作为合作的, sorted 排序下比较好看些
-            agent_training_order[order_start_idx] = [start_agent] + sorted(other_agent[:coo_count])
-            # 剩下为不合作的, sorted 排序下比较好看些
-            agent_training_non_coo[order_start_idx] = sorted(other_agent[coo_count:])
-            order_start_idx += 1
-    print("agent_training_order:")
-    for k_, v_ in agent_training_order.items():
-        print(k_, ":", v_)
-    print("agent_training_non_coo:")
-    for k_, v_ in agent_training_non_coo.items():
-        print(k_, ":", v_)
+    # coo_count_loop = [1, 2, 3, 4]  # 每次挑出n个合作的情况
+    # order_start_idx = 1  # 起始索引：agent_training_order 和 agent_training_non_coo 的
+    # batch_count = 2  # 跑x次
+    # start_agent = 2  # 起始agent：agent_training_order的
+    # other_agent = [1, 3, 4, 5, 6, 7, 8]
+    # for coo_count in coo_count_loop:  # 每次挑出n个合作的情况
+    #     for i in range(batch_count):  # 跑x次
+    #         random.shuffle(other_agent)  # 每次打乱，取前n个作为合作的，剩下为不合作的
+    #         # 取前n个作为合作的, sorted 排序下比较好看些
+    #         agent_training_order[order_start_idx] = [start_agent] + sorted(other_agent[:coo_count])
+    #         # 剩下为不合作的, sorted 排序下比较好看些
+    #         agent_training_non_coo[order_start_idx] = sorted(other_agent[coo_count:])
+    #         order_start_idx += 1
+    # print("agent_training_order:")
+    # for k_, v_ in agent_training_order.items():
+    #     print(k_, ":", v_)
+    # print("agent_training_non_coo:")
+    # for k_, v_ in agent_training_non_coo.items():
+    #     print(k_, ":", v_)
 
 
 
-    # agent_training_order = {
+    agent_training_order = {
     #     # 1: [1, 2, 3, 4], # 头部+后续合作的
     #     # 2: [2, 1, 3, 4],
     #     # 3: [3, 1, 2, 4],
@@ -1418,15 +1529,15 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-    #     # 1: [1, 2, 3, 4, 5, 6, 7, 8],
-    #     # 2: [2, 1, 3, 4, 5, 6, 7, 8],
-    #     # 3: [3, 1, 2, 4, 5, 6, 7, 8],
-    #     # 4: [4, 1, 2, 3, 4, 5, 7, 8],
-    #     # 5: [5, 1, 2, 3, 4, 6, 7, 8],
-    #     # 6: [6, 1, 2, 3, 4, 5, 7, 8],
-    #     # 7: [7, 1, 2, 3, 4, 5, 6, 8],
-    #     # 8: [8, 1, 2, 3, 4, 5, 6, 7]
-    # }
+        1: [1, 2, 3, 4, 5, 6, 7, 8],
+        2: [2, 1, 3, 4, 5, 6, 7, 8],
+        # 3: [3, 1, 2, 4, 5, 6, 7, 8],
+        # 4: [4, 1, 2, 3, 5, 6, 7, 8],
+        # 5: [5, 1, 2, 3, 4, 6, 7, 8],
+        # 6: [6, 1, 2, 3, 4, 5, 7, 8],
+        # 7: [7, 1, 2, 3, 4, 5, 6, 8],
+        # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+    }
     #
     # agent_training_non_coo = {
     #     1: [5, 6, 7, 8], # 不合作的
@@ -1443,6 +1554,43 @@ if __name__ == '__main__':
     #     # 7: [7, 1, 2, 3, 4, 5, 6, 8],
     #     # 8: [8, 1, 2, 3, 4, 5, 6, 7]
     # }
+    # 【测试修改模型变量】
+    # agent = "agent_1"
+    # cal_trainable_variables = {}
+    # trainer = Trainer(options, agent)
+    # with tf.compat.v1.Session(config=config) as sess:
+    #     path = "output/WN18RR/test_multi_agent_2022-10-08-15-45-23/agent_1/model/model.ckpt"
+    #     trainer.initialize(restore=path, sess=sess)
+    #     cal_trainable_variables[agent] = {}
+    #     new_var_to_restore_list = []
+    #     for i in range(len(tf.compat.v1.trainable_variables())):
+    #         # 取模型文件的变量数据
+    #         current_var = tf.compat.v1.trainable_variables()[i]
+    #         cal_trainable_variables[agent][current_var.name] = current_var + 1
+    #         var_name = current_var.name.split(":")[0]
+    #         print("current_var.name:", var_name)
+    #         print("current_var:", current_var.eval())
+    #         # 预览变量运算的效果
+    #         print("current_var+1:", (current_var + 1).eval())
+    #         var_new = tf.compat.v1.convert_to_tensor(current_var + 1)
+    #         var_assign = tf.compat.v1.assign(current_var, var_new)
+    #         new_var_to_restore_list.append(var_assign)
+    #         # else:
+    #         #     new_var_to_restore_list.append(v)
+    #     for new_var_to_restore in new_var_to_restore_list:
+    #         sess.run(new_var_to_restore)
+    #
+    #     for i in range(len(tf.compat.v1.trainable_variables())):
+    #         # 再次取模型文件的变量数据
+    #         current_var = tf.compat.v1.trainable_variables()[i]
+    #         cal_trainable_variables[agent][current_var.name] = current_var.eval()
+    #         var_name = current_var.name.split(":")[0]
+    #         var_value =current_var.eval()
+    #         print("after current_var.name:", var_name)
+    #         print("after current_var.eval():", var_value)
+    #
+    #     # print("cal_trainable_variables:", cal_trainable_variables)
+    # exit(1)
 
     # Training
     # 不直接读取模型
@@ -1450,26 +1598,106 @@ if __name__ == '__main__':
         episode_handovers = {}
 
         if not options['transferred_training']:
-            evaluation_per_agent, batch_loss_per_agent, memory_use_per_agent, model_path = train_multi_agents(options, agent_names)
+            evaluation_per_agent, batch_loss_per_agent, memory_use_per_agent, model_path, ho_count = train_multi_agents(options, agent_names)
             if options['distributed_training']:
-                save_result_to_excel(data_splitter, evaluation_per_agent, batch_loss_per_agent, memory_use_per_agent)
+                save_result_to_excel(data_splitter, evaluation_per_agent, batch_loss_per_agent, memory_use_per_agent, ho_count)
 
             cal_trainable_variables = {}
-            for train_order in model_path.keys():
-                for agent in model_path[train_order]:
-                    trainer = Trainer(options, agent)
+            avg_trainable_variables = {}
+            avg_length_loop = [2, 3, 4, 5, 6, 7, 8]
+            # 前n个agent做平均后再测试
+            for avg_length in avg_length_loop:
+                cal_trainable_variables[avg_length] = {}
+                avg_trainable_variables[avg_length] = {}
+                # 1.加载相应模型，并获取变量
+                for train_order in model_path.keys():
+                    for agent in model_path[train_order]:
+                        if agent not in agent_names[:avg_length]: # 不在范围内的不做计算
+                            print("计算前", avg_length, "个agent平均值，当前agent：", agent, "不在计算之内")
+                            continue
+                        trainer = Trainer(options, agent)
+                        with tf.compat.v1.Session(config=config) as sess:
+                            # 初始化训练模型
+                            if model_path[train_order][agent] == "":
+                                sess.run(trainer.initialize())
+                            else:
+                                print("model_path[train_order][agent]:", model_path[train_order][agent])
+                                trainer.initialize(restore=model_path[train_order][agent], sess=sess)
+                                cal_trainable_variables[avg_length][agent] = {}
+                                for i in range(len(tf.compat.v1.trainable_variables())):
+                                    current_var = tf.compat.v1.trainable_variables()[i]
+                                    var_name = current_var.name.split(":")[0]
+                                    if var_name not in avg_trainable_variables[avg_length]:
+                                        avg_trainable_variables[avg_length][var_name] = []
+                                    avg_trainable_variables[avg_length][var_name].append(current_var.eval())
+                                    cal_trainable_variables[avg_length][agent][var_name] = current_var.eval()
+                                    # print("current_var.name:", current_var.name)
+                                    # print("current_var.eval():", current_var.eval())
+                        # tf.compat.v1.enable_eager_execution()
+                        # tf.compat.v1.disable_v2_behavior()
+                        tf.compat.v1.reset_default_graph()
+                # 2.计算变量平均值
+                for k_, var_list in avg_trainable_variables[avg_length].items():
+                    print("k_:", k_)
+                    print("len(var_list):", len(var_list))
+                    avg_trainable_variables[avg_length][k_] = sum(var_list)/len(var_list)
+                    # print("avg(var_list):", avg_trainable_variables[avg_length][k_])
+
+                # print(cal_trainable_variables)
+                # print(avg_trainable_variables)
+                # 3.将agent_1的模型拿出来载入变量的平均值
+                # 跑多次看平均是不是一致
+                last_agent_name = agent_names[avg_length-1]  # 每次取最后一个agent作为基础模型并测试
+                avg_loop = [(last_agent_name, "avg_base_" + last_agent_name)]
+                for base_agent, avg_agent in avg_loop:
+                    # base_agent = "agent_1"
+                    # avg_agent = "agent_avg_base_1"
+                    # base_agent = "agent_2"
+                    # avg_agent = "agent_avg_base_2"
+                    cal_trainable_variables[avg_length] = {}
+                    trainer = Trainer(options, base_agent)
                     with tf.compat.v1.Session(config=config) as sess:
-                        # 初始化训练模型
-                        if model_path[train_order][agent] == "":
-                            sess.run(trainer.initialize())
-                        else:
-                            trainer.initialize(restore=model_path[train_order][agent], sess=sess)
-                            cal_trainable_variables[agent] = []
-                            for i in range(len(tf.compat.v1.trainable_variables())):
-                                cal_trainable_variables[agent].append(tf.compat.v1.trainable_variables()[i].eval())
+                        path = model_path[1][base_agent]
+                        # path = "output/WN18RR/test_multi_agent_2022-10-08-15-45-23/agent_1/model/model.ckpt"
+                        trainer.initialize(restore=path, sess=sess)
+                        cal_trainable_variables[avg_length][avg_agent] = {}
+                        new_var_to_restore_list = []
+                        for i in range(len(tf.compat.v1.trainable_variables())):
+                            # 取模型文件的变量数据
+                            current_var = tf.compat.v1.trainable_variables()[i]
+                            var_name = current_var.name.split(":")[0]
+                            if var_name in avg_trainable_variables[avg_length]:
+                                cal_trainable_variables[avg_length][avg_agent][current_var.name] = avg_trainable_variables[avg_length][var_name]
+                                print("avg_var.name:", var_name)
+                                print("avg_var:", avg_trainable_variables[avg_length][var_name])
+                                var_new = tf.compat.v1.convert_to_tensor(avg_trainable_variables[avg_length][var_name])
+                                var_assign = tf.compat.v1.assign(current_var, var_new)
+                            else:
+                                var_assign = tf.compat.v1.assign(current_var, current_var)
+                            new_var_to_restore_list.append(var_assign)
+
+                        print("count_of_var_to_restore:", len(new_var_to_restore_list))
+                        for new_var_to_restore in new_var_to_restore_list:
+                            sess.run(new_var_to_restore)
+
+                        for i in range(len(tf.compat.v1.trainable_variables())):
+                            # 再次取模型文件的变量数据 查看是否正确修改且赋值
+                            current_var = tf.compat.v1.trainable_variables()[i]
+                            cal_trainable_variables[avg_length][avg_agent][current_var.name] = current_var.eval()
+                            var_name = current_var.name.split(":")[0]
+                            var_value =current_var.eval()
+                            print("after avg_var.name:", var_name)
+                            print("after avg_var:", var_value)
+
+                        print("cal_trainable_variables:", cal_trainable_variables[avg_length])
+
+                        # 4.测试avg_auc并存入文件
+                        evaluation_per_agent = test_avg_model(avg_agent, trainer, sess)
+                        save_avg_model_auc_to_excel(evaluation_per_agent)
                     tf.compat.v1.reset_default_graph()
 
-            print(cal_trainable_variables)
+
+
 
         # sorted_flag 按信心值大到小排序训练
         # sorted_flag_with_non_coo 按信息值排序+带不合作的agent，为true时必须带上 agent_training_non_coo
@@ -1480,7 +1708,7 @@ if __name__ == '__main__':
             evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options,
                                                                 agent_names, agent_training_order, sorted_flag=True,
                                                                 agent_training_non_coo=agent_training_non_coo,
-                                                                sorted_flag_with_non_coo=True, more_loop_count=more_loop_count)
+                                                                sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
             save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
 
     # 直接读取模型
