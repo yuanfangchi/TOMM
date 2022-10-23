@@ -515,27 +515,28 @@ class Trainer(object):
                 episode_handover_state_on_handover_node = {}
 
                 if i > 0:
-                    for path_idx in range(i):
-                        current_entities_at_t = reconstruct_state_map[path_idx]['current_entities']
-                        next_relations_at_t = reconstruct_state_map[path_idx]['next_relations']
-                        next_entities_at_t = reconstruct_state_map[path_idx]['next_entities']
-
-                        feed_dict[path_idx][self.candidate_relation_sequence[path_idx]] = \
-                        reconstruct_state_map[path_idx]['next_relations']
-                        feed_dict[path_idx][self.candidate_entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
-                            'next_entities']
-                        feed_dict[path_idx][self.entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
-                            'current_entities']
-
-                        per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [
-                            self.per_example_loss[path_idx],
-                            self.per_example_logits[path_idx], self.action_idx[path_idx], self.rnn_state[path_idx], self.rnn_output[path_idx],
-                            self.chosen_relations[path_idx]], feed_dict=feed_dict[path_idx])
-
-                        episode_handover_state_on_handover_node['current_entities'] = current_entities_at_t
-                        episode_handover_state_on_handover_node['next_relations'] = next_relations_at_t
-                        episode_handover_state_on_handover_node['next_entities'] = next_entities_at_t
-                        episode_handovers_on_handover_node[episode_handover].append((i, episode_handover_state_on_handover_node))
+                    break
+                    # for path_idx in range(i):
+                    #     current_entities_at_t = reconstruct_state_map[path_idx]['current_entities']
+                    #     next_relations_at_t = reconstruct_state_map[path_idx]['next_relations']
+                    #     next_entities_at_t = reconstruct_state_map[path_idx]['next_entities']
+                    #
+                    #     feed_dict[path_idx][self.candidate_relation_sequence[path_idx]] = \
+                    #     reconstruct_state_map[path_idx]['next_relations']
+                    #     feed_dict[path_idx][self.candidate_entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
+                    #         'next_entities']
+                    #     feed_dict[path_idx][self.entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
+                    #         'current_entities']
+                    #
+                    #     per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [
+                    #         self.per_example_loss[path_idx],
+                    #         self.per_example_logits[path_idx], self.action_idx[path_idx], self.rnn_state[path_idx], self.rnn_output[path_idx],
+                    #         self.chosen_relations[path_idx]], feed_dict=feed_dict[path_idx])
+                    #
+                    #     episode_handover_state_on_handover_node['current_entities'] = current_entities_at_t
+                    #     episode_handover_state_on_handover_node['next_relations'] = next_relations_at_t
+                    #     episode_handover_state_on_handover_node['next_entities'] = next_entities_at_t
+                    #     episode_handovers_on_handover_node[episode_handover].append((i, episode_handover_state_on_handover_node))
 
                 new_state = episode.return_next_actions(np.array(episode_handover_state['current_entities']), i)
                 valid_loss_idx = self.update_valid_loss_idx(new_state['next_entities'])
@@ -610,13 +611,13 @@ class Trainer(object):
                 #self.test(sess, beam=True, print_paths=False)
                 self.save_path = self.model_saver.save(sess, self.model_dir + "model" + '.ckpt')
 
-                # with open(self.pretrained_embeddings_action_dir, 'w') as out:
-                #     pprint(self.agent.relation_lookup_table, stream=out)
-                # self.pretrained_embeddings_action = self.pretrained_embeddings_action_dir
-                #
-                # with open(self.pretrained_embeddings_entity_dir, 'w') as out:
-                #     pprint(self.agent.entity_lookup_table, stream=out)
-                # self.pretrained_embeddings_entity = self.pretrained_embeddings_entity_dir
+                with open(self.pretrained_embeddings_action_dir, 'w') as out:
+                    pprint(self.agent.relation_lookup_table, stream=out)
+                self.pretrained_embeddings_action = self.pretrained_embeddings_action_dir
+
+                with open(self.pretrained_embeddings_entity_dir, 'w') as out:
+                    pprint(self.agent.entity_lookup_table, stream=out)
+                self.pretrained_embeddings_entity = self.pretrained_embeddings_entity_dir
 
                 logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
@@ -972,7 +973,7 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
         if i == 0:
             # 打头的计算信心值，后续一并在打头的基础上计算信心值
             for idx in range(len(agent_names)):
-                count = calc_confident_indicator(options, agent_names, {}, 1, idx,
+                count, used_entities_value_set = calc_confident_indicator(options, agent_names, {}, 1, idx,
                                                  episode_handover_for_agent)
                 ho_count[1][agent_names[idx]] = count
 
@@ -1031,14 +1032,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
     memory_use = {}
     ho_count = {}
     ho_ratio = {}
-    # agent_training_order = {
-    #         #1: [1, 2, 3],
-    #         #2: [1, 3, 2],
-    #         #3: [2, 3, 1],
-    #         4: [2, 1, 3],
-    #         #5: [3, 1, 2],
-    #         #6: [3, 2, 1]
-    #     }
+
     for agent_order in agent_training_order:
         evaluation[agent_order] = {}
         batch_loss[agent_order] = {}
@@ -1089,15 +1083,17 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         if sorted_flag:
             print("sorted_flag:", sorted_flag)
             counts = []
+            used_entities_value_array = []
             for idx in range(len(agent_training_order[agent_order])):
 
-                count = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
+                count, used_entities_value_set = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
                                          episode_handover_for_agent)
                 if idx == 0:
                     ho_count[agent_order][agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 else:
                     ho_count[agent_order]["continued on " + agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 counts.append(count)
+                used_entities_value_array.append(used_entities_value_set)
                 #print(count)
 
             query_ratio = {}
@@ -1111,6 +1107,8 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             sorted(query_ratio.keys())
             print("counts:", counts)
             print("query_ratio:", query_ratio)
+            for used_entities_value in used_entities_value_array:
+                print("used_entities_value_set len", len(used_entities_value))
             sort_count_list = sorted(query_ratio.keys(), reverse=True)
             sorted_count_and_agent_name_map = [{count_: agent_training_order[agent_order][query_ratio[count_]]} for count_ in sort_count_list]
             # 打印排序后 信息值与agent name的对应关系
@@ -1187,10 +1185,10 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
 
             if not sorted_flag_with_non_coo:
-                # order_index = query_ratio.keys()
-                # random.shuffle(order_index)
-                for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
-                # for q_r_sorted in order_index:
+                #order_index = list(query_ratio.keys())
+                #random.shuffle(order_index)
+                for q_r_sorted in sorted(query_ratio.keys()):
+                #for q_r_sorted in order_index:
                     if query_ratio[q_r_sorted] == 0:
                         continue
                     continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
@@ -1282,6 +1280,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
         j = agent_training_order[order_idx][agent_idx] - 1
     else:
         j = agent_idx
+    print(agent_names[j])
     train_environment = env(options, agent_names[j])
     # 初始空set装所有用过的
     used_entities_value_set = set()
@@ -1300,13 +1299,13 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
             handled_entities = np.array(handled_entities)
             # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
             for i in handled_entities:
-                if i:
+                if i > 1:
                     action_entity = train_environment.grapher.array_store[i,:,:]
                     if len(action_entity):
                         # print("action_entity:", action_entity)
                         for action in action_entity:
-                            if action[0] > 0 and action[1] > 0:
-                                print("action[0] > 0 and action[1] > 0:", action)
+                            if action[0] > 0 and action[1] > 2:
+                                # print("action[0] > 0 and action[1] > 2:", action)
                                 count += 1
                                 break
                     else:
@@ -1314,8 +1313,8 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
 
             np_1 = handover['current_entities']
             np_2 = handled_entities
-            print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
-            print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
+            #print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
+            # print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
             # a = np.array([[[1,2,3,4],[5,6,7,8],[9,10,11,12]], \
             #               [[13,14,15,16],[17,18,19,20],[21,22,23,24]], \
             #               [[25,26,27,28],[29,30,31,32],[33,34,35,36]]])
@@ -1326,7 +1325,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
             #         if action[0] > 0 and action[1] > 0:
             #             count += 1
 
-    return count
+    return count, used_entities_value_set
 
 
 def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count = None, ho_ratio = None):
@@ -1439,10 +1438,8 @@ if __name__ == '__main__':
 
     if options['distributed_training']:
         # agent_names = ['agent_1', 'agent_2', 'agent_3']
-        # agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
-        agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
-        # agent_names = ['agent_1', 'agent_2']
-        # agent_names = ['agent_1', 'agent_5']
+        agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        # agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
     else:
         agent_names = ['agent_full']
 
@@ -1474,9 +1471,6 @@ if __name__ == '__main__':
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
-
-    triple_count_array = [100, 200, 300, 400, 500, 600, 700, 800, 900]
-    #triple_count_array = [100]
 
     # 2后随机挑1个合作的，其余为不合作的，跑第一次 如 [2, 1]+[3, 4, 5, 6, 7, 8] agent_training_order + agent_training_non_coo
     # 2后随机挑1个合作的，其余为不合作的，跑第二次 如 [2, 6]+[1, 3, 4, 5, 7, 8] agent_training_order + agent_training_non_coo
@@ -1529,14 +1523,14 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        1: [1, 2, 3, 4, 5, 6, 7, 8],
+        1: [1, 5, 6, 8, 7, 4, 2, 3],
         2: [2, 1, 3, 4, 5, 6, 7, 8],
-        # 3: [3, 1, 2, 4, 5, 6, 7, 8],
-        # 4: [4, 1, 2, 3, 5, 6, 7, 8],
-        # 5: [5, 1, 2, 3, 4, 6, 7, 8],
-        # 6: [6, 1, 2, 3, 4, 5, 7, 8],
-        # 7: [7, 1, 2, 3, 4, 5, 6, 8],
-        # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+        3: [3, 1, 2, 4, 5, 6, 7, 8],
+        4: [4, 1, 2, 3, 5, 6, 7, 8],
+        5: [5, 1, 2, 3, 4, 6, 7, 8],
+        6: [6, 1, 2, 3, 4, 5, 7, 8],
+        7: [7, 1, 2, 3, 4, 5, 6, 8],
+        8: [8, 1, 2, 3, 4, 5, 6, 7]
     }
     #
     # agent_training_non_coo = {
@@ -1708,7 +1702,7 @@ if __name__ == '__main__':
             evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options,
                                                                 agent_names, agent_training_order, sorted_flag=True,
                                                                 agent_training_non_coo=agent_training_non_coo,
-                                                                sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
+                                                               sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
             save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
 
     # 直接读取模型
