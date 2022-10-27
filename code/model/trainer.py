@@ -84,11 +84,9 @@ class Trainer(object):
 
 
     def calc_reinforce_loss(self):
-
         loss = tf.stack(self.per_example_loss, axis=1)  # [B, T]
 
         self.tf_baseline = self.baseline.get_baseline_value()
-        # self.pp = tf.Print(self.tf_baseline)
         # multiply with rewards
         final_reward = self.cum_discounted_reward - self.tf_baseline
         # reward_std = tf.sqrt(tf.reduce_mean(tf.square(final_reward))) + 1e-5 # constant addded for numerical stability
@@ -281,13 +279,26 @@ class Trainer(object):
             logits = []
             handover_idx = None
             for i in range(self.path_length):
-                current_entities_at_t = state['current_entities']
+                filtered_current_state = copy.deepcopy(state['current_entities'])
+                for entity_idx in range(len(filtered_current_state)):
+                    if filtered_current_state[entity_idx]:
+                        action_entity = self.train_environment.grapher.array_store[filtered_current_state[entity_idx], :, :]
+                        if len(action_entity):
+                            for action_idx in range(len(action_entity)):
+                                if action_entity[action_idx][0] <= 0 or action_entity[action_idx][1] <= 0:
+                                    filtered_current_state[entity_idx] = 0
+                                    state['next_relations'][action_idx] = 0
+                                    state['next_entities'][action_idx] = 0
+                                    
+
+
+                current_entities_at_t = filtered_current_state
                 next_relations_at_t = state['next_relations']
                 next_entities_at_t = state['next_entities']
 
                 feed_dict[i][self.candidate_relation_sequence[i]] = state['next_relations']
                 feed_dict[i][self.candidate_entity_sequence[i]] = state['next_entities']
-                feed_dict[i][self.entity_sequence[i]] = state['current_entities']
+                feed_dict[i][self.entity_sequence[i]] = filtered_current_state
 
                 per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [self.per_example_loss[i],
                                                                                                                          self.per_example_logits[i], self.action_idx[i], self.rnn_state[i], self.rnn_output[i], self.chosen_relations[i]],
@@ -844,21 +855,6 @@ class Trainer(object):
         score["Hits@20"] = all_final_reward_20
         score["auc"] = auc
 
-        # with open(self.output_dir + '/scores.txt', 'a') as score_file:
-        #     score_file.write("Hits@1: {0:7.4f}".format(all_final_reward_1))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@3: {0:7.4f}".format(all_final_reward_3))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@5: {0:7.4f}".format(all_final_reward_5))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@10: {0:7.4f}".format(all_final_reward_10))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@20: {0:7.4f}".format(all_final_reward_20))
-        #     score_file.write("\n")
-        #     score_file.write("auc: {0:7.4f}".format(auc))
-        #     score_file.write("\n")
-        #     score_file.write("\n")
-
         logger.info("Hits@1: {0:7.4f}".format(all_final_reward_1))
         logger.info("Hits@3: {0:7.4f}".format(all_final_reward_3))
         logger.info("Hits@5: {0:7.4f}".format(all_final_reward_5))
@@ -926,7 +922,6 @@ def test_auc_avg(save_path, path_logger_file, output_dir, trainer, sess, data_in
     return score
 
 def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
-    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -951,7 +946,6 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
 
             # 训练
             episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
-            episode_handovers[agent_names[i]] = episode_handover_for_agent
             save_path = trainer.save_path
             path_logger_file = trainer.path_logger_file
             output_dir = trainer.output_dir
@@ -980,7 +974,6 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
     return evaluation, batch_loss, memory_use, model_path,ho_count
 
 def train_multi_agents_with_transfer(options, agent_names, agent_training_order, triple_count_max=None, iter=None):
-    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -1031,14 +1024,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
     memory_use = {}
     ho_count = {}
     ho_ratio = {}
-    # agent_training_order = {
-    #         #1: [1, 2, 3],
-    #         #2: [1, 3, 2],
-    #         #3: [2, 3, 1],
-    #         4: [2, 1, 3],
-    #         #5: [3, 1, 2],
-    #         #6: [3, 2, 1]
-    #     }
+
     for agent_order in agent_training_order:
         evaluation[agent_order] = {}
         batch_loss[agent_order] = {}
@@ -1064,7 +1050,6 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
             # 训练
             episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
-            tvars = tf.compat.v1.trainable_variables()
             episode_handovers[agent_names[i]] = episode_handover_for_agent
             save_path = trainer.save_path
             path_logger_file = trainer.path_logger_file
@@ -1082,9 +1067,6 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         evaluation[agent_order][agent_names[i] + iter_string] = score
         batch_loss[agent_order][agent_names[i] + iter_string] = batch_loss_for_agent
         memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
-        sorted_flag = sorted_flag
-        sorted_flag_with_non_coo = sorted_flag_with_non_coo
-        agent_training_non_coo = agent_training_non_coo
 
         if sorted_flag:
             print("sorted_flag:", sorted_flag)
@@ -1255,7 +1237,6 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 
         # 训练
         episode_handovers_on_handover_node, batch_loss_for_agent, memory_use_for_agent = trainer.train_full_episode(sess, episode_handover_for_agent)
-        #episode_handover_for_agent = episode_handovers_on_handover_node
 
         save_path = trainer.save_path
         path_logger_file = trainer.path_logger_file
@@ -1439,15 +1420,15 @@ if __name__ == '__main__':
 
     if options['distributed_training']:
         # agent_names = ['agent_1', 'agent_2', 'agent_3']
-        # agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
-        agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
+        agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        # agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
         # agent_names = ['agent_1', 'agent_2']
         # agent_names = ['agent_1', 'agent_5']
     else:
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    # data_splitter.split(options, agent_names)
+    #data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1529,8 +1510,8 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        1: [1, 2, 3, 4, 5, 6, 7, 8],
-        2: [2, 1, 3, 4, 5, 6, 7, 8],
+        1: [1, 2],
+        #2: [2, 1, 3, 4, 5, 6, 7, 8],
         # 3: [3, 1, 2, 4, 5, 6, 7, 8],
         # 4: [4, 1, 2, 3, 5, 6, 7, 8],
         # 5: [5, 1, 2, 3, 4, 6, 7, 8],
