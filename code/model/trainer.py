@@ -279,26 +279,26 @@ class Trainer(object):
             logits = []
             handover_idx = None
             for i in range(self.path_length):
-                filtered_current_state = copy.deepcopy(state['current_entities'])
-                for entity_idx in range(len(filtered_current_state)):
-                    if filtered_current_state[entity_idx]:
-                        action_entity = self.train_environment.grapher.array_store[filtered_current_state[entity_idx], :, :]
-                        if len(action_entity):
-                            for action_idx in range(len(action_entity)):
-                                if action_entity[action_idx][0] <= 0 or action_entity[action_idx][1] <= 0:
-                                    filtered_current_state[entity_idx] = 0
-                                    state['next_relations'][action_idx] = 0
-                                    state['next_entities'][action_idx] = 0
+                # filtered_current_state = copy.deepcopy(state['current_entities'])
+                # for entity_idx in range(len(filtered_current_state)):
+                #     if filtered_current_state[entity_idx]:
+                #         action_entity = self.train_environment.grapher.array_store[filtered_current_state[entity_idx], :, :]
+                #         if len(action_entity):
+                #             for action_idx in range(len(action_entity)):
+                #                 if action_entity[action_idx][0] <= 0 or action_entity[action_idx][1] <= 0:
+                #                     filtered_current_state[entity_idx] = 0
+                #                     state['next_relations'][action_idx] = 0
+                #                     state['next_entities'][action_idx] = 0
 
 
 
-                current_entities_at_t = filtered_current_state
+                current_entities_at_t = state['current_entities']
                 next_relations_at_t = state['next_relations']
                 next_entities_at_t = state['next_entities']
 
                 feed_dict[i][self.candidate_relation_sequence[i]] = state['next_relations']
                 feed_dict[i][self.candidate_entity_sequence[i]] = state['next_entities']
-                feed_dict[i][self.entity_sequence[i]] = filtered_current_state
+                feed_dict[i][self.entity_sequence[i]] = state['current_entities']
 
                 per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [self.per_example_loss[i],
                                                                                                                          self.per_example_logits[i], self.action_idx[i], self.rnn_state[i], self.rnn_output[i], self.chosen_relations[i]],
@@ -1069,13 +1069,15 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
 
         if sorted_flag:
-            print("sorted_flag:", sorted_flag)
             counts = []
             used_entities_value_array = []
+            overlap_entities = {}
             for idx in range(len(agent_training_order[agent_order])):
 
                 count, used_entities_value_set = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
                                          episode_handover_for_agent)
+                overlap_entities, used_entities_value_set = calc_overlap_entity(options, agent_names, agent_training_order, agent_order, idx,
+                                         episode_handover_for_agent, overlap_entities)
                 if idx == 0:
                     ho_count[agent_order][agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 else:
@@ -1104,6 +1106,11 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             for count_agent_name in sorted_count_and_agent_name_map:
                 print("count_agent_name: ", count_agent_name)
             print("sorted(query_ratio.keys(), reverse=True):", sorted(query_ratio.keys(), reverse=True))
+
+            overlap_ratio = {}
+            print("overlap entity count with agent idx ", overlap_entities)
+            for agent in overlap_entities:
+                overlap_ratio[len(overlap_entities[agent])] = agent
 
             # continue
             # return evaluation, batch_loss, memory_use, ho_count, ho_ratio
@@ -1173,10 +1180,10 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
 
             if not sorted_flag_with_non_coo:
-                # order_index = query_ratio.keys()
-                # random.shuffle(order_index)
-                for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
-                # for q_r_sorted in order_index:
+                order_index = list(query_ratio.keys())
+                random.shuffle(order_index)
+                #for overlap_ratio_sorted in sorted(overlap_ratio.keys(), reverse=True):
+                for q_r_sorted in order_index:
                     if query_ratio[q_r_sorted] == 0:
                         continue
                     continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
@@ -1260,6 +1267,54 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 
     return evaluation, batch_loss, memory_use
 
+def calc_overlap_entity(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent, overlap_entities):
+
+    if agent_training_order:
+        j = agent_training_order[order_idx][agent_idx] - 1
+    else:
+        j = agent_idx
+    train_environment = env(options, agent_names[j])
+
+    found_entity_agent_t = []
+
+    # 初始空set装所有用过的
+    used_entities_value_set = set()
+    for episode_handovers in episode_handover_for_agent:
+        for I, handover in episode_handover_for_agent[episode_handovers]:
+            # 深拷贝，不影响原数据
+            np_tmp_1x1700 = copy.deepcopy(handover['current_entities'])  # 1*1700
+            # 不重复的重新组数据
+            handled_entities = []
+            for i in np_tmp_1x1700:
+                # 不重复原值 重复给0
+                tmp_entities = i if i not in used_entities_value_set else 0
+                handled_entities.append(tmp_entities)
+                used_entities_value_set.add(i)
+            # 转回np数组不影响后续
+            handled_entities = np.array(handled_entities)
+            # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
+            for i in handled_entities:
+                if i:
+                    action_entity = train_environment.grapher.array_store[i,:,:]
+                    if len(action_entity):
+                        # print("action_entity:", action_entity)
+                        for action in action_entity:
+                            if action[0] > 0 and action[1] > 2:
+                                found_entity_agent_t.append(i)
+                                break
+                    else:
+                        print("len(action_entity) == 0 ", action_entity)
+
+    if agent_idx == 0:
+        overlap_entities[agent_idx] = found_entity_agent_t
+    else:
+        overlap_entities[agent_idx] = []
+        for entity in found_entity_agent_t:
+            if entity in overlap_entities[0]:
+                overlap_entities[agent_idx].append(entity)
+
+    return overlap_entities, used_entities_value_set
+
 def calc_confident_indicator(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent):
 
     count = 0
@@ -1296,20 +1351,6 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
                                 break
                     else:
                         print("len(action_entity) == 0 ", action_entity)
-
-            np_1 = handover['current_entities']
-            np_2 = handled_entities
-            #print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
-            # print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
-            # a = np.array([[[1,2,3,4],[5,6,7,8],[9,10,11,12]], \
-            #               [[13,14,15,16],[17,18,19,20],[21,22,23,24]], \
-            #               [[25,26,27,28],[29,30,31,32],[33,34,35,36]]])
-            # b = np.array([[[],[],[]],[[],[],[]],[[],[],[]]])
-
-            # for current_entity in action_entity:
-            #     for action in current_entity:
-            #         if action[0] > 0 and action[1] > 0:
-            #             count += 1
 
     return count, used_entities_value_set
 
@@ -1430,7 +1471,7 @@ if __name__ == '__main__':
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    # data_splitter.split(options, agent_names)
+    #data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1511,12 +1552,12 @@ if __name__ == '__main__':
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
         1: [1, 2, 3, 4, 5, 6, 7, 8],
         2: [2, 1, 3, 4, 5, 6, 7, 8],
-        # 3: [3, 1, 2, 4, 5, 6, 7, 8],
-        # 4: [4, 1, 2, 3, 5, 6, 7, 8],
-        # 5: [5, 1, 2, 3, 4, 6, 7, 8],
-        # 6: [6, 1, 2, 3, 4, 5, 7, 8],
-        # 7: [7, 1, 2, 3, 4, 5, 6, 8],
-        # 8: [8, 1, 2, 3, 4, 5, 6, 7]
+        3: [3, 1, 2, 4, 5, 6, 7, 8],
+        4: [4, 1, 2, 3, 5, 6, 7, 8],
+        5: [5, 1, 2, 3, 4, 6, 7, 8],
+        6: [6, 1, 2, 3, 4, 5, 7, 8],
+        7: [7, 1, 2, 3, 4, 5, 6, 8],
+        8: [8, 1, 2, 3, 4, 5, 6, 7]
     }
     #
     # agent_training_non_coo = {

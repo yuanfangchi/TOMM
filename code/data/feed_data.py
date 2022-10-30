@@ -34,7 +34,7 @@ class RelationEntityBatcher():
         if self.mode == 'train' and self.agent is not None:
             input_file = input_dir + '/train_' + self.agent + '.txt'
         elif self.mode == 'dev' and self.agent is not None:
-            input_file = input_dir + '/dev_' + self.agent + '.txt'
+            input_file = input_dir + '/dev' + '.txt'
         else:
             input_file = input_dir+'/{0}.txt'.format(self.mode)
 
