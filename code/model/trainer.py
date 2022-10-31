@@ -84,11 +84,9 @@ class Trainer(object):
 
 
     def calc_reinforce_loss(self):
-
         loss = tf.stack(self.per_example_loss, axis=1)  # [B, T]
 
         self.tf_baseline = self.baseline.get_baseline_value()
-        # self.pp = tf.Print(self.tf_baseline)
         # multiply with rewards
         final_reward = self.cum_discounted_reward - self.tf_baseline
         # reward_std = tf.sqrt(tf.reduce_mean(tf.square(final_reward))) + 1e-5 # constant addded for numerical stability
@@ -281,6 +279,19 @@ class Trainer(object):
             logits = []
             handover_idx = None
             for i in range(self.path_length):
+                # filtered_current_state = copy.deepcopy(state['current_entities'])
+                # for entity_idx in range(len(filtered_current_state)):
+                #     if filtered_current_state[entity_idx]:
+                #         action_entity = self.train_environment.grapher.array_store[filtered_current_state[entity_idx], :, :]
+                #         if len(action_entity):
+                #             for action_idx in range(len(action_entity)):
+                #                 if action_entity[action_idx][0] <= 0 or action_entity[action_idx][1] <= 0:
+                #                     filtered_current_state[entity_idx] = 0
+                #                     state['next_relations'][action_idx] = 0
+                #                     state['next_entities'][action_idx] = 0
+
+
+
                 current_entities_at_t = state['current_entities']
                 next_relations_at_t = state['next_relations']
                 next_entities_at_t = state['next_entities']
@@ -845,21 +856,6 @@ class Trainer(object):
         score["Hits@20"] = all_final_reward_20
         score["auc"] = auc
 
-        # with open(self.output_dir + '/scores.txt', 'a') as score_file:
-        #     score_file.write("Hits@1: {0:7.4f}".format(all_final_reward_1))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@3: {0:7.4f}".format(all_final_reward_3))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@5: {0:7.4f}".format(all_final_reward_5))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@10: {0:7.4f}".format(all_final_reward_10))
-        #     score_file.write("\n")
-        #     score_file.write("Hits@20: {0:7.4f}".format(all_final_reward_20))
-        #     score_file.write("\n")
-        #     score_file.write("auc: {0:7.4f}".format(auc))
-        #     score_file.write("\n")
-        #     score_file.write("\n")
-
         logger.info("Hits@1: {0:7.4f}".format(all_final_reward_1))
         logger.info("Hits@3: {0:7.4f}".format(all_final_reward_3))
         logger.info("Hits@5: {0:7.4f}".format(all_final_reward_5))
@@ -927,7 +923,6 @@ def test_auc_avg(save_path, path_logger_file, output_dir, trainer, sess, data_in
     return score
 
 def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
-    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -952,7 +947,6 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
 
             # 训练
             episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
-            episode_handovers[agent_names[i]] = episode_handover_for_agent
             save_path = trainer.save_path
             path_logger_file = trainer.path_logger_file
             output_dir = trainer.output_dir
@@ -981,7 +975,6 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
     return evaluation, batch_loss, memory_use, model_path,ho_count
 
 def train_multi_agents_with_transfer(options, agent_names, agent_training_order, triple_count_max=None, iter=None):
-    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -1058,7 +1051,6 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
             # 训练
             episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
-            tvars = tf.compat.v1.trainable_variables()
             episode_handovers[agent_names[i]] = episode_handover_for_agent
             save_path = trainer.save_path
             path_logger_file = trainer.path_logger_file
@@ -1076,18 +1068,17 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         evaluation[agent_order][agent_names[i] + iter_string] = score
         batch_loss[agent_order][agent_names[i] + iter_string] = batch_loss_for_agent
         memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
-        sorted_flag = sorted_flag
-        sorted_flag_with_non_coo = sorted_flag_with_non_coo
-        agent_training_non_coo = agent_training_non_coo
 
         if sorted_flag:
-            print("sorted_flag:", sorted_flag)
             counts = []
             used_entities_value_array = []
+            overlap_entities = {}
             for idx in range(len(agent_training_order[agent_order])):
 
                 count, used_entities_value_set = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
                                          episode_handover_for_agent)
+                overlap_entities, used_entities_value_set = calc_overlap_entity(options, agent_names, agent_training_order, agent_order, idx,
+                                         episode_handover_for_agent, overlap_entities)
                 if idx == 0:
                     ho_count[agent_order][agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 else:
@@ -1123,6 +1114,11 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             for count_agent_name in sorted_count_and_agent_name_map:
                 print("count_agent_name: ", count_agent_name)
             print("sorted(query_ratio.keys(), reverse=True):", sorted(query_ratio.keys(), reverse=True))
+
+            overlap_ratio = {}
+            print("overlap entity count with agent idx ", overlap_entities)
+            for agent in overlap_entities:
+                overlap_ratio[len(overlap_entities[agent])] = agent
 
             # continue
             # return evaluation, batch_loss, memory_use, ho_count, ho_ratio
@@ -1263,7 +1259,6 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 
         # 训练
         episode_handovers_on_handover_node, batch_loss_for_agent, memory_use_for_agent = trainer.train_full_episode(sess, episode_handover_for_agent)
-        #episode_handover_for_agent = episode_handovers_on_handover_node
 
         save_path = trainer.save_path
         path_logger_file = trainer.path_logger_file
@@ -1283,6 +1278,54 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 
     return save_path, evaluation, batch_loss, memory_use
 
+def calc_overlap_entity(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent, overlap_entities):
+
+    if agent_training_order:
+        j = agent_training_order[order_idx][agent_idx] - 1
+    else:
+        j = agent_idx
+    train_environment = env(options, agent_names[j])
+
+    found_entity_agent_t = []
+
+    # 初始空set装所有用过的
+    used_entities_value_set = set()
+    for episode_handovers in episode_handover_for_agent:
+        for I, handover in episode_handover_for_agent[episode_handovers]:
+            # 深拷贝，不影响原数据
+            np_tmp_1x1700 = copy.deepcopy(handover['current_entities'])  # 1*1700
+            # 不重复的重新组数据
+            handled_entities = []
+            for i in np_tmp_1x1700:
+                # 不重复原值 重复给0
+                tmp_entities = i if i not in used_entities_value_set else 0
+                handled_entities.append(tmp_entities)
+                used_entities_value_set.add(i)
+            # 转回np数组不影响后续
+            handled_entities = np.array(handled_entities)
+            # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
+            for i in handled_entities:
+                if i:
+                    action_entity = train_environment.grapher.array_store[i,:,:]
+                    if len(action_entity):
+                        # print("action_entity:", action_entity)
+                        for action in action_entity:
+                            if action[0] > 0 and action[1] > 2:
+                                found_entity_agent_t.append(i)
+                                break
+                    else:
+                        print("len(action_entity) == 0 ", action_entity)
+
+    if agent_idx == 0:
+        overlap_entities[agent_idx] = found_entity_agent_t
+    else:
+        overlap_entities[agent_idx] = []
+        for entity in found_entity_agent_t:
+            if entity in overlap_entities[0]:
+                overlap_entities[agent_idx].append(entity)
+
+    return overlap_entities, used_entities_value_set
+
 def calc_confident_indicator(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent):
 
     count = 0
@@ -1290,7 +1333,6 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
         j = agent_training_order[order_idx][agent_idx] - 1
     else:
         j = agent_idx
-    print(agent_names[j])
     train_environment = env(options, agent_names[j])
     # 初始空set装所有用过的
     used_entities_value_set = set()
@@ -1309,7 +1351,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
             handled_entities = np.array(handled_entities)
             # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
             for i in handled_entities:
-                if i > 1:
+                if i:
                     action_entity = train_environment.grapher.array_store[i,:,:]
                     if len(action_entity):
                         # print("action_entity:", action_entity)
@@ -1320,20 +1362,6 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
                                 break
                     else:
                         print("len(action_entity) == 0 ", action_entity)
-
-            np_1 = handover['current_entities']
-            np_2 = handled_entities
-            #print("np_1 handover:", np_1.shape, np_1.dtype, np_1.size, np_1.ndim, np_1)
-            # print("np_2 handover:", np_2.shape, np_2.dtype, np_2.size, np_2.ndim, np_2)
-            # a = np.array([[[1,2,3,4],[5,6,7,8],[9,10,11,12]], \
-            #               [[13,14,15,16],[17,18,19,20],[21,22,23,24]], \
-            #               [[25,26,27,28],[29,30,31,32],[33,34,35,36]]])
-            # b = np.array([[[],[],[]],[[],[],[]],[[],[],[]]])
-
-            # for current_entity in action_entity:
-            #     for action in current_entity:
-            #         if action[0] > 0 and action[1] > 0:
-            #             count += 1
 
     return count, used_entities_value_set
 
@@ -1454,7 +1482,7 @@ if __name__ == '__main__':
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    # data_splitter.split(options, agent_names)
+    #data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1533,7 +1561,7 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        1: [1, 5, 6, 8, 7, 4, 2, 3],
+        1: [1, 2, 3, 4, 5, 6, 7, 8],
         2: [2, 1, 3, 4, 5, 6, 7, 8],
         3: [3, 1, 2, 4, 5, 6, 7, 8],
         4: [4, 1, 2, 3, 5, 6, 7, 8],
@@ -1712,7 +1740,7 @@ if __name__ == '__main__':
             evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options,
                                                                 agent_names, agent_training_order, sorted_flag=True,
                                                                 agent_training_non_coo=agent_training_non_coo,
-                                                               sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
+                                                                sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
             save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
 
     # 直接读取模型
