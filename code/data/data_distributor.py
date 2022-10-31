@@ -78,37 +78,38 @@ class DataDistributor:
             # # 打乱数据集
             # random.shuffle(triple_file)
             # 计算正态分布数据集
-            # print("total_count", total_count)
-            # smoothness = 1000  # 平滑度，n个agent生成正态分布不够平滑，一般给1000倍agent数量的点足够，最后按索引截取即可
-            # # 实测方差为1，再经过下面3步变形处理后起伏较为平缓，不突兀
-            # normal_sorted = sorted(np.random.normal(0, 1, len(agent_names)*smoothness))
-            # target_index_suffix = str(smoothness // 2)  # 每多少个index相间取一个正态值 1000/2=500 '500'
-            # index_suffix_long = len(target_index_suffix)  # 判断index 如 500 1500 2500时就拿出来
-            # print('index_suffix_long:', index_suffix_long)
-            # normal_tmp = [i for i in normal_sorted if str(normal_sorted.index(i))[-index_suffix_long:] == target_index_suffix]
-            #
-            # # normal_tmp
-            # # |                         --/
-            # # |                     --/
-            # # |                --/
-            # # 0----------------------
-            # # |         --/
-            # # |    --/
-            # # |--/
-            #
-            # print('normal_tmp:', normal_tmp)
-            #
-            # normal_tmp = [abs(i) for i in normal_tmp]  # 折叠正态分布
-            #
-            # # normal_tmp
-            # # |--\                     --/
-            # # |    --\             --/
-            # # |         --\   --/
-            # # 0----------------------
-            #
-            # max_count = int(max(normal_tmp)) + 1  # 找到最大值并进位，
-            # normal_tmp = [max_count - i for i in normal_tmp]  # 反转正态分布
-            # print('normal_tmp:', normal_tmp)
+            print("total_count", total_count)
+            smoothness = 1000  # 平滑度，n个agent生成正态分布不够平滑，一般给1000倍agent数量的点足够，最后按索引截取即可
+            # 实测方差为1，再经过下面3步变形处理后起伏较为平缓，不突兀
+            print("variance_count", 0.3)  # 打印方差
+            normal_sorted = sorted(np.random.normal(0, 0.3, len(agent_names)*smoothness))
+            target_index_suffix = str(smoothness // 2)  # 每多少个index相间取一个正态值 1000/2=500 '500'
+            index_suffix_long = len(target_index_suffix)  # 判断index 如 500 1500 2500时就拿出来
+            print('index_suffix_long:', index_suffix_long)
+            normal_tmp = [i for i in normal_sorted if str(normal_sorted.index(i))[-index_suffix_long:] == target_index_suffix]
+
+            # normal_tmp
+            # |                         --/
+            # |                     --/
+            # |                --/
+            # 0----------------------
+            # |         --/
+            # |    --/
+            # |--/
+
+            print('normal_tmp:', normal_tmp)
+
+            normal_tmp = [abs(i) for i in normal_tmp]  # 折叠正态分布
+
+            # normal_tmp
+            # |--\                     --/
+            # |    --\             --/
+            # |         --\   --/
+            # 0----------------------
+
+            max_count = int(max(normal_tmp)) + 1  # 找到最大值并进位，
+            normal_tmp = [max_count - i for i in normal_tmp]  # 反转正态分布
+            print('normal_tmp:', normal_tmp)
 
             # normal_tmp
             # |          --/   \--
@@ -116,17 +117,17 @@ class DataDistributor:
             # | --/                     \--
             # 0----------------------
             # 计算每个比例
-            # triple_count_per_agent = [i/sum(normal_tmp) for i in normal_tmp]
-            # # 计算每个agent总数
-            # # 计算完了算出起始索引去切片原数据集，保证不重复的分配
-            # normal_count = [int(i*total_count) for i in triple_count_per_agent]
-            # print('normal_count:', normal_count)
-            # # 170000 大约 8000 19000 26000 30000 30000 26000 19000 8000
-            triple_count_per_agent = [1/len(agent_names) for i in agent_names]
+            triple_count_per_agent = [i/sum(normal_tmp) for i in normal_tmp]
             # 计算每个agent总数
             # 计算完了算出起始索引去切片原数据集，保证不重复的分配
             normal_count = [int(i*total_count) for i in triple_count_per_agent]
             print('normal_count:', normal_count)
+            # 170000 大约 8000 19000 26000 30000 30000 26000 19000 8000
+            # triple_count_per_agent = [1/len(agent_names) for i in agent_names]
+            # # 计算每个agent总数
+            # # 计算完了算出起始索引去切片原数据集，保证不重复的分配
+            # normal_count = [int(i*total_count) for i in triple_count_per_agent]
+            # print('normal_count:', normal_count)
             # 170000 大约 20000 20000 20000 20000 20000 20000 20000 20000
 
 

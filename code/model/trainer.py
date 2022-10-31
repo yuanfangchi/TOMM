@@ -515,28 +515,28 @@ class Trainer(object):
                 episode_handover_state_on_handover_node = {}
 
                 if i > 0:
-                    break
-                    # for path_idx in range(i):
-                    #     current_entities_at_t = reconstruct_state_map[path_idx]['current_entities']
-                    #     next_relations_at_t = reconstruct_state_map[path_idx]['next_relations']
-                    #     next_entities_at_t = reconstruct_state_map[path_idx]['next_entities']
-                    #
-                    #     feed_dict[path_idx][self.candidate_relation_sequence[path_idx]] = \
-                    #     reconstruct_state_map[path_idx]['next_relations']
-                    #     feed_dict[path_idx][self.candidate_entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
-                    #         'next_entities']
-                    #     feed_dict[path_idx][self.entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
-                    #         'current_entities']
-                    #
-                    #     per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [
-                    #         self.per_example_loss[path_idx],
-                    #         self.per_example_logits[path_idx], self.action_idx[path_idx], self.rnn_state[path_idx], self.rnn_output[path_idx],
-                    #         self.chosen_relations[path_idx]], feed_dict=feed_dict[path_idx])
-                    #
-                    #     episode_handover_state_on_handover_node['current_entities'] = current_entities_at_t
-                    #     episode_handover_state_on_handover_node['next_relations'] = next_relations_at_t
-                    #     episode_handover_state_on_handover_node['next_entities'] = next_entities_at_t
-                    #     episode_handovers_on_handover_node[episode_handover].append((i, episode_handover_state_on_handover_node))
+                    #break
+                    for path_idx in range(i):
+                        current_entities_at_t = reconstruct_state_map[path_idx]['current_entities']
+                        next_relations_at_t = reconstruct_state_map[path_idx]['next_relations']
+                        next_entities_at_t = reconstruct_state_map[path_idx]['next_entities']
+
+                        feed_dict[path_idx][self.candidate_relation_sequence[path_idx]] = \
+                        reconstruct_state_map[path_idx]['next_relations']
+                        feed_dict[path_idx][self.candidate_entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
+                            'next_entities']
+                        feed_dict[path_idx][self.entity_sequence[path_idx]] = reconstruct_state_map[path_idx][
+                            'current_entities']
+
+                        per_example_loss, per_example_logits, idx, rnn_state, rnn_output, chosen_relation = sess.partial_run(h, [
+                            self.per_example_loss[path_idx],
+                            self.per_example_logits[path_idx], self.action_idx[path_idx], self.rnn_state[path_idx], self.rnn_output[path_idx],
+                            self.chosen_relations[path_idx]], feed_dict=feed_dict[path_idx])
+
+                        episode_handover_state_on_handover_node['current_entities'] = current_entities_at_t
+                        episode_handover_state_on_handover_node['next_relations'] = next_relations_at_t
+                        episode_handover_state_on_handover_node['next_entities'] = next_entities_at_t
+                        episode_handovers_on_handover_node[episode_handover].append((i, episode_handover_state_on_handover_node))
 
                 new_state = episode.return_next_actions(np.array(episode_handover_state['current_entities']), i)
                 valid_loss_idx = self.update_valid_loss_idx(new_state['next_entities'])
@@ -1098,7 +1098,10 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
             query_ratio = {}
             for c in range(len(counts)):
-                query_ratio[counts[c]] = c
+                # query_ratio[c] = counts[c]
+                if counts[c] not in query_ratio:
+                    query_ratio[counts[c]] = []
+                query_ratio[counts[c]].append(c)
                 if c == 0:
                     ho_ratio[agent_order][agent_names[agent_training_order[agent_order][c] - 1]] = counts[c]
                 else:
@@ -1110,7 +1113,11 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             for used_entities_value in used_entities_value_array:
                 print("used_entities_value_set len", len(used_entities_value))
             sort_count_list = sorted(query_ratio.keys(), reverse=True)
-            sorted_count_and_agent_name_map = [{count_: agent_training_order[agent_order][query_ratio[count_]]} for count_ in sort_count_list]
+            sorted_count_and_agent_name_map = []
+            for count_ in sort_count_list:
+                for agent_idx in query_ratio[count_]:
+                    sorted_count_and_agent_name_map.append({count_:agent_training_order[agent_order][agent_idx]})
+            # sorted_count_and_agent_name_map = [{count_: agent_training_order[agent_order][query_ratio[count_]]} for count_ in sort_count_list]
             # 打印排序后 信息值与agent name的对应关系
             print("query_ratio sorted_count_and_agent_name_map:", sorted_count_and_agent_name_map)
             for count_agent_name in sorted_count_and_agent_name_map:
@@ -1151,7 +1158,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                         coo_inx = agent_training_order[agent_order][query_ratio[agent_key_with_max_auc]]
                         choice_agent_idx = random.choice(non_coo_whit_hands_up + [coo_inx])
                         non_coo = False if choice_agent_idx == coo_inx else True
-                        continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
+                        save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
                                                               choice_agent_idx,
                                                               episode_handover_for_agent, evaluation, batch_loss,
                                                               memory_use, save_path,
@@ -1174,7 +1181,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                     # if not random.choice([0, 1]):  # 没有被选上
                     #     continue
                     choice_agent_idx = random.choice(non_coo_whit_hands_up)
-                    continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
+                    save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
                                                           choice_agent_idx,
                                                           episode_handover_for_agent, evaluation, batch_loss,
                                                           memory_use, save_path,
@@ -1185,15 +1192,18 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
 
             if not sorted_flag_with_non_coo:
-                #order_index = list(query_ratio.keys())
-                #random.shuffle(order_index)
-                for q_r_sorted in sorted(query_ratio.keys()):
-                #for q_r_sorted in order_index:
-                    if query_ratio[q_r_sorted] == 0:
-                        continue
-                    continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, query_ratio[q_r_sorted],
-                                                      episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path,
-                                                      config)
+                # order_index = list(query_ratio.keys())
+                # random.shuffle(order_index)
+                for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
+                # for q_r_sorted in order_index:
+                    # if query_ratio[q_r_sorted] == [0]:
+                    #     continue
+                    for agent_idx in query_ratio[q_r_sorted]:
+                        if agent_idx == 0:
+                            continue
+                        save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, agent_idx,
+                                                          episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path,
+                                                          config)
         else:
             for agent_idx in range(len(agent_training_order[agent_order])):
                 if agent_idx == 0:
@@ -1271,7 +1281,7 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
             batch_loss[order_idx]["continued on non_coo " + agent_names[j]] = batch_loss_for_agent
             memory_use[order_idx]["continued on non_coo " + agent_names[j]] = memory_use_for_agent
 
-    return evaluation, batch_loss, memory_use
+    return save_path, evaluation, batch_loss, memory_use
 
 def calc_confident_indicator(options, agent_names, agent_training_order, order_idx, agent_idx, episode_handover_for_agent):
 
