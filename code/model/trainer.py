@@ -1118,7 +1118,9 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             overlap_ratio = {}
             print("overlap entity count with agent idx ", overlap_entities)
             for agent in overlap_entities:
-                overlap_ratio[len(overlap_entities[agent])] = agent
+                if len(overlap_entities[agent]) not in overlap_ratio:
+                    overlap_ratio[len(overlap_entities[agent])] = []
+                overlap_ratio[len(overlap_entities[agent])].append(agent)
 
             # continue
             # return evaluation, batch_loss, memory_use, ho_count, ho_ratio
@@ -1190,11 +1192,11 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
             if not sorted_flag_with_non_coo:
                 # order_index = list(query_ratio.keys())
                 # random.shuffle(order_index)
-                for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
+                for overlap_r_agent in sorted(overlap_ratio.keys(), reverse=True):
                 # for q_r_sorted in order_index:
                     # if query_ratio[q_r_sorted] == [0]:
                     #     continue
-                    for agent_idx in query_ratio[q_r_sorted]:
+                    for agent_idx in overlap_ratio[overlap_r_agent]:
                         if agent_idx == 0:
                             continue
                         save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, agent_idx,
@@ -1561,7 +1563,7 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        1: [1, 2, 3, 4, 5, 6, 7, 8],
+        #1: [1, 2, 3, 4, 5, 6, 7, 8],
         2: [2, 1, 3, 4, 5, 6, 7, 8],
         3: [3, 1, 2, 4, 5, 6, 7, 8],
         4: [4, 1, 2, 3, 5, 6, 7, 8],
