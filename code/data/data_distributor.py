@@ -81,8 +81,8 @@ class DataDistributor:
             print("total_count", total_count)
             smoothness = 1000  # 平滑度，n个agent生成正态分布不够平滑，一般给1000倍agent数量的点足够，最后按索引截取即可
             # 实测方差为1，再经过下面3步变形处理后起伏较为平缓，不突兀
-            print("variance_count", 0.3)  # 打印方差
-            normal_sorted = sorted(np.random.normal(0, 0.3, len(agent_names)*smoothness))
+            print("variance_count", 1)  # 打印方差
+            normal_sorted = sorted(np.random.normal(0, 1, len(agent_names)*smoothness))
             target_index_suffix = str(smoothness // 2)  # 每多少个index相间取一个正态值 1000/2=500 '500'
             index_suffix_long = len(target_index_suffix)  # 判断index 如 500 1500 2500时就拿出来
             print('index_suffix_long:', index_suffix_long)
@@ -279,7 +279,8 @@ class DataDistributor:
         for agent in agent_names:
             with open(params['data_input_dir'] + '/' + 'graph_' + agent + '.txt') as triple_file_raw:
                 triple_file = list(csv.reader(triple_file_raw, delimiter='\t'))
-                batcher_idx = np.random.randint(len(triple_file), size=(1, 10000))
+                train_data_len = int(len(triple_file) * 0.5)
+                batcher_idx = np.random.randint(len(triple_file), size=(1, train_data_len))
                 with open(params['data_input_dir'] + '/' + 'train_' + agent + '.txt', 'w') as triple_file_name:
                     writer = csv.writer(triple_file_name, delimiter='\t')
                     for i in range(0, len(batcher_idx[0])):
