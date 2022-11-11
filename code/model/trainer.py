@@ -254,7 +254,7 @@ class Trainer(object):
 
         return valid_loss_idx
 
-    def train(self, sess):
+    def train(self, sess, save_model_for_reuse=False):
         # import pdb
         # pdb.set_trace()
         fetches, feeds, feed_dict = self.gpu_io_setup()
@@ -279,19 +279,6 @@ class Trainer(object):
             logits = []
             handover_idx = None
             for i in range(self.path_length):
-                # filtered_current_state = copy.deepcopy(state['current_entities'])
-                # for entity_idx in range(len(filtered_current_state)):
-                #     if filtered_current_state[entity_idx]:
-                #         action_entity = self.train_environment.grapher.array_store[filtered_current_state[entity_idx], :, :]
-                #         if len(action_entity):
-                #             for action_idx in range(len(action_entity)):
-                #                 if action_entity[action_idx][0] <= 0 or action_entity[action_idx][1] <= 0:
-                #                     filtered_current_state[entity_idx] = 0
-                #                     state['next_relations'][action_idx] = 0
-                #                     state['next_entities'][action_idx] = 0
-
-
-
                 current_entities_at_t = state['current_entities']
                 next_relations_at_t = state['next_relations']
                 next_entities_at_t = state['next_entities']
@@ -372,6 +359,8 @@ class Trainer(object):
 
             logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
             self.save_path = self.model_saver.save(sess, self.model_dir + "model" + '.ckpt')
+            if save_model_for_reuse:
+                self.save_path_for_reuse = self.model_saver.save(sess, self.model_dir + "model_for_reuse" + '.ckpt')
 
             with open(self.pretrained_embeddings_action_dir, 'w') as out:
                 pprint(self.agent.relation_lookup_table, stream=out)
@@ -923,6 +912,7 @@ def test_auc_avg(save_path, path_logger_file, output_dir, trainer, sess, data_in
     return score
 
 def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
+    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -947,6 +937,7 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
 
             # 训练
             episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
+            episode_handovers[agent_names[i]] = episode_handover_for_agent
             save_path = trainer.save_path
             path_logger_file = trainer.path_logger_file
             output_dir = trainer.output_dir
@@ -975,6 +966,7 @@ def train_multi_agents(options, agent_names, triple_count_max=None, iter=None):
     return evaluation, batch_loss, memory_use, model_path,ho_count
 
 def train_multi_agents_with_transfer(options, agent_names, agent_training_order, triple_count_max=None, iter=None):
+    episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
@@ -1018,13 +1010,20 @@ def train_multi_agents_with_transfer(options, agent_names, agent_training_order,
     return evaluation, batch_loss, memory_use
 
 def train_multi_agents_with_handover_query(options, agent_names, agent_training_order, agent_training_non_coo=None,triple_count_max=None, iter=None,
-                                           sorted_flag=False, sorted_flag_with_non_coo=False, more_loop_count=0):
-    episode_handovers = {}
+                                           sorted_flag=False, sorted_flag_with_non_coo=False, more_loop_count=0,order_and_header_map=None,
+                                           reused_header_map=None, episode_handovers=None):
+    if not episode_handovers:
+        episode_handovers = {}
     evaluation = {}
     batch_loss = {}
     memory_use = {}
     ho_count = {}
     ho_ratio = {}
+    # order_and_header_map {"order_type": "shuffle", "reused_header": True}
+    # reused_header_map {"agent_*":{save_path}···}
+    order_sorted = True
+    if order_and_header_map['order_type'] == "shuffle":
+        order_sorted = False
 
     for agent_order in agent_training_order:
         evaluation[agent_order] = {}
@@ -1040,21 +1039,45 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         config = tf.compat.v1.ConfigProto()
         config.gpu_options.allow_growth = False
         config.log_device_placement = False
+        save_model_for_reuse = False
+        # 复用场景
+        if order_and_header_map['reused_header']:
+            # 复用场景，且模型还没有保存（表示首次训练，需要训练并保存）
+            if agent_names[i] not in reused_header_map:
+                save_model_for_reuse = True
+            else:
+                save_path = reused_header_map[agent_names[i]]
 
         with tf.compat.v1.Session(config=config) as sess:
             # 初始化训练模型
             if save_path is None:
                 sess.run(trainer.initialize())
             else:
-                sess.run(trainer.initialize())
-            trainer.initialize_pretrained_embeddings(sess=sess)
-
-            # 训练
-            episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess)
-            episode_handovers[agent_names[i]] = episode_handover_for_agent
-            save_path = trainer.save_path
-            path_logger_file = trainer.path_logger_file
+                # 加载复用的模型
+                trainer.initialize(restore=save_path, sess=sess)
+                # sess.run(trainer.initialize())
+            path_logger_file = trainer.output_dir
             output_dir = trainer.output_dir
+            trainer.initialize_pretrained_embeddings(sess=sess)
+            if not save_path:
+                # 训练
+                episode_handover_for_agent, batch_loss_for_agent, memory_use_for_agent = trainer.train(sess, save_model_for_reuse=save_model_for_reuse)
+                tvars = tf.compat.v1.trainable_variables()
+                episode_handovers[agent_names[i]] = episode_handover_for_agent
+                save_path = trainer.save_path
+                path_logger_file = trainer.path_logger_file
+                output_dir = trainer.output_dir
+                # 复用header_model 要保存一份
+                if save_model_for_reuse:
+                    print("save_path_for_reuse:", trainer.save_path_for_reuse)
+                    reused_header_map[agent_names[i]] = trainer.save_path_for_reuse
+                iter_string = ""
+                if triple_count_max:
+                    iter_string = iter_string + "_" + str(triple_count_max)
+                if iter:
+                    iter_string = iter_string + "_" + str(iter)
+                batch_loss[agent_order][agent_names[i] + iter_string] = batch_loss_for_agent
+                memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
 
         tf.compat.v1.reset_default_graph()
 
@@ -1066,19 +1089,23 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
         if iter:
             iter_string = iter_string + "_" + str(iter)
         evaluation[agent_order][agent_names[i] + iter_string] = score
-        batch_loss[agent_order][agent_names[i] + iter_string] = batch_loss_for_agent
-        memory_use[agent_order][agent_names[i] + iter_string] = memory_use_for_agent
+        sorted_flag = sorted_flag
+        sorted_flag_with_non_coo = sorted_flag_with_non_coo
+        agent_training_non_coo = agent_training_non_coo
 
         if sorted_flag:
+            print("sorted_flag:", sorted_flag)
             counts = []
             used_entities_value_array = []
             overlap_entities = {}
             for idx in range(len(agent_training_order[agent_order])):
 
                 count, used_entities_value_set = calc_confident_indicator(options, agent_names, agent_training_order, agent_order, idx,
-                                         episode_handover_for_agent)
-                overlap_entities, used_entities_value_set = calc_overlap_entity(options, agent_names, agent_training_order, agent_order, idx,
-                                         episode_handover_for_agent, overlap_entities)
+                                         episode_handovers[agent_names[i]])
+                overlap_entities, used_entities_value_set = calc_overlap_entity(options, agent_names,
+                                                                                agent_training_order, agent_order, idx,
+                                                                                episode_handovers[agent_names[i]],
+                                                                                overlap_entities)
                 if idx == 0:
                     ho_count[agent_order][agent_names[agent_training_order[agent_order][idx] - 1]] = count
                 else:
@@ -1158,7 +1185,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                         non_coo = False if choice_agent_idx == coo_inx else True
                         save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
                                                               choice_agent_idx,
-                                                              episode_handover_for_agent, evaluation, batch_loss,
+                                                              episode_handovers[agent_names[i]], evaluation, batch_loss,
                                                               memory_use, save_path,
                                                               config, whit_non_coo=True, non_coo=non_coo)
                         if choice_agent_idx == coo_inx:
@@ -1181,7 +1208,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                     choice_agent_idx = random.choice(non_coo_whit_hands_up)
                     save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order,
                                                           choice_agent_idx,
-                                                          episode_handover_for_agent, evaluation, batch_loss,
+                                                          episode_handovers[agent_names[i]], evaluation, batch_loss,
                                                           memory_use, save_path,
                                                           config, whit_non_coo=True, non_coo=True)
                     # 选到了不合作的 去掉
@@ -1190,17 +1217,21 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
 
             if not sorted_flag_with_non_coo:
-                # order_index = list(query_ratio.keys())
-                # random.shuffle(order_index)
-                for overlap_r_agent in sorted(overlap_ratio.keys(), reverse=True):
-                # for q_r_sorted in order_index:
+                # order_index = []
+                if order_sorted:
+                    order_index = sorted(query_ratio.keys(), reverse=True)
+                else:
+                    order_index = list(query_ratio.keys())
+                    random.shuffle(order_index)
+                # for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
+                for q_r_sorted in order_index:
                     # if query_ratio[q_r_sorted] == [0]:
                     #     continue
-                    for agent_idx in overlap_ratio[overlap_r_agent]:
+                    for agent_idx in query_ratio[q_r_sorted]:
                         if agent_idx == 0:
                             continue
                         save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, agent_idx,
-                                                          episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path,
+                                                          episode_handovers[agent_names[i]], evaluation, batch_loss, memory_use, save_path,
                                                           config)
         else:
             for agent_idx in range(len(agent_training_order[agent_order])):
@@ -1218,7 +1249,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
 
                     # 训练
                     episode_handovers_on_handover_node, batch_loss_for_agent, memory_use_for_agent = trainer.train_full_episode(
-                        sess, episode_handover_for_agent)
+                        sess, episode_handovers[agent_names[i]])
                     # episode_handover_for_agent = episode_handovers_on_handover_node
 
                     save_path = trainer.save_path
@@ -1232,7 +1263,7 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                     batch_loss[agent_order]["continued on " + agent_names[j]] = batch_loss_for_agent
                     memory_use[agent_order]["continued on " + agent_names[j]] = memory_use_for_agent
 
-    return evaluation, batch_loss, memory_use, ho_count, ho_ratio
+    return evaluation, batch_loss, memory_use, ho_count, ho_ratio, episode_handovers
 
 def continue_training_with_handover_query(options, agent_names, agent_training_order, order_idx, agent_idx,
                                           episode_handover_for_agent, evaluation, batch_loss, memory_use, save_path, config,
@@ -1261,6 +1292,7 @@ def continue_training_with_handover_query(options, agent_names, agent_training_o
 
         # 训练
         episode_handovers_on_handover_node, batch_loss_for_agent, memory_use_for_agent = trainer.train_full_episode(sess, episode_handover_for_agent)
+        #episode_handover_for_agent = episode_handovers_on_handover_node
 
         save_path = trainer.save_path
         path_logger_file = trainer.path_logger_file
@@ -1353,7 +1385,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
             handled_entities = np.array(handled_entities)
             # action_entity = train_environment.grapher.array_store[handover['current_entities'],:,:]
             for i in handled_entities:
-                if i:
+                if i > 1:
                     action_entity = train_environment.grapher.array_store[i,:,:]
                     if len(action_entity):
                         # print("action_entity:", action_entity)
@@ -1369,7 +1401,7 @@ def calc_confident_indicator(options, agent_names, agent_training_order, order_i
 
 
 def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count = None, ho_ratio = None):
-    with open(options['output_dir'] + '/test/8_8scores.csv', 'w') as evaluation_score:
+    with open(options['output_dir'] + '/test/8_8scores.csv', 'a+') as evaluation_score:
         writer = csv.writer(evaluation_score, delimiter=',')
         writer.writerow(
             ["item", "triple_count", "entity_count", "relation_count", "ho_count", "ho_ratio", "Hits@1", "Hits@3", "Hits@5", "Hits@10",
@@ -1405,7 +1437,7 @@ def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_c
             row = []
             row.append("line break")
             writer.writerow(row)
-    with open(options['output_dir'] + '/test/batch_loss.csv', 'w') as batch_loss_writer:
+    with open(options['output_dir'] + '/test/batch_loss.csv', 'a+') as batch_loss_writer:
         writer = csv.writer(batch_loss_writer, delimiter=',')
         writer.writerow(["item", "batch_count", "loss"])
         for round in batch_loss:
@@ -1416,7 +1448,7 @@ def save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_c
                     row.append(j)
                     row.append(batch_loss[round][i][j])
                     writer.writerow(row)
-    with open(options['output_dir'] + '/test/memory_use.csv', 'w') as memory_use_writer:
+    with open(options['output_dir'] + '/test/memory_use.csv', 'a+') as memory_use_writer:
         writer = csv.writer(memory_use_writer, delimiter=',')
         writer.writerow(["item", "batch_count", "memory_use"])
         for round in memory_use:
@@ -1484,7 +1516,7 @@ if __name__ == '__main__':
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    #data_splitter.split(options, agent_names)
+    # data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1563,7 +1595,7 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        #1: [1, 2, 3, 4, 5, 6, 7, 8],
+        1: [1, 2, 3, 4, 5, 6, 7, 8],
         2: [2, 1, 3, 4, 5, 6, 7, 8],
         3: [3, 1, 2, 4, 5, 6, 7, 8],
         4: [4, 1, 2, 3, 5, 6, 7, 8],
@@ -1737,13 +1769,60 @@ if __name__ == '__main__':
         # sorted_flag_with_non_coo 按信息值排序+带不合作的agent，为true时必须带上 agent_training_non_coo
         # agent_training_non_coo 不合作的agent节点
         if options['transferred_training']:
-            more_loop_count = 2  # 跑完合作的之后，再跑n轮不合作的
-            #evaluation, batch_loss, memory_use = train_multi_agents_with_transfer(options,agent_names, agent_training_order)
-            evaluation, batch_loss, memory_use, ho_count, ho_ratio = train_multi_agents_with_handover_query(options,
-                                                                agent_names, agent_training_order, sorted_flag=True,
-                                                                agent_training_non_coo=agent_training_non_coo,
-                                                                sorted_flag_with_non_coo=False, more_loop_count=more_loop_count)
-            save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
+            order_and_header_loop = [
+                {"order_type":"sort", "reused_header":True}, # 模拟新的复用打头agent训练的模型
+                {"order_type":"shuffle", "reused_header":True}, # 模拟新的复用打头agent训练的模型
+                # 以上建议是两个实验成一组，前者序列要额外保存一份header model 供后者序列打头载入使用
+                # reused_header判定后逻辑处理，reused_header_map中没有就要训练并保存，有就直接取，不训练
+                # 所以一组数量大于2，除了第一位实验，后续实验的header model都处理为复用
+                # --分割线--
+                # 下面是模拟旧的实验方式，仅仅将降序+随机连续执行，并写入了同一个结果excel中
+                # {"order_type":"sort", "reused_header":False}, # 模拟旧的降序
+                # {"order_type":"shuffle", "reused_header":False} # 模拟旧的随机
+            ]
+            reused_header_map = {} # {"agent_*":{save_path}···}
+            have_saved_for_reuse = False  # 是否已经保存了打头的各种结果数值
+            save_output_data = {}  # 保存了打头的各种结果数值
+            episode_handovers = {} # 初始化一个
+            for order_and_header_map in order_and_header_loop:
+                print("order_and_header_map:", order_and_header_map)
+                more_loop_count = 2  # 跑完合作的之后，再跑n轮不合作的
+                #evaluation, batch_loss, memory_use = train_multi_agents_with_transfer(options,agent_names, agent_training_order)
+                evaluation, batch_loss, memory_use, ho_count, ho_ratio, episode_handovers = train_multi_agents_with_handover_query(options,
+                                                                    agent_names, agent_training_order, sorted_flag=True,
+                                                                    agent_training_non_coo=agent_training_non_coo,
+                                                                   sorted_flag_with_non_coo=False, more_loop_count=more_loop_count,
+                                                                    order_and_header_map=order_and_header_map,
+                                                                    reused_header_map=reused_header_map,
+                                                                    episode_handovers=episode_handovers)
+                if order_and_header_map['reused_header']:
+                    # 保存复用的header的各种结果数值
+                    if not have_saved_for_reuse:
+                        # 保存每个order的header结果数值
+                        for order_, index_list in agent_training_order.items():
+                            header_index = index_list[0]-1
+                            agent_name = agent_names[header_index]
+                            save_output_data[order_] = {}
+                            save_output_data[order_]["evaluation"] = evaluation[order_][agent_name]
+                            save_output_data[order_]["batch_loss"] = batch_loss[order_][agent_name]
+                            save_output_data[order_]["memory_use"] = memory_use[order_][agent_name]
+                            save_output_data[order_]["ho_count"] = ho_count[order_][agent_name]
+                            save_output_data[order_]["ho_ratio"] = ho_ratio[order_][agent_name]
+                        have_saved_for_reuse = True
+                        print("save_output_data:", save_output_data)
+                    else:
+                        print("save_output_data:", save_output_data)
+                        # 处理将每个order的header数据补齐
+                        for order_, index_list in agent_training_order.items():
+                            header_index = index_list[0] - 1
+                            agent_name = agent_names[header_index]
+                            evaluation[order_][agent_name] = save_output_data[order_]["evaluation"]
+                            batch_loss[order_][agent_name] = save_output_data[order_]["batch_loss"]
+                            memory_use[order_][agent_name] = save_output_data[order_]["memory_use"]
+                            ho_count[order_][agent_name] = save_output_data[order_]["ho_count"]
+                            ho_ratio[order_][agent_name] = save_output_data[order_]["ho_ratio"]
+
+                save_result_to_excel(data_splitter, evaluation, batch_loss, memory_use, ho_count, ho_ratio)
 
     # 直接读取模型
     # Testing on test with best model
