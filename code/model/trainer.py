@@ -1220,14 +1220,22 @@ def train_multi_agents_with_handover_query(options, agent_names, agent_training_
                 # order_index = []
                 if order_sorted:
                     order_index = sorted(query_ratio.keys(), reverse=True)
+                    for query_r_sorted in order_index:
+                        # if query_ratio[q_r_sorted] == [0]:
+                        #     continue
+                        for agent_idx in query_ratio[query_r_sorted]:
+                            if agent_idx == 0:
+                                continue
+                            save_path, _, _, _ = continue_training_with_handover_query(options, agent_names,
+                                                                                       agent_training_order,
+                                                                                       agent_order, agent_idx,
+                                                                                       episode_handovers[
+                                                                                           agent_names[i]], evaluation,
+                                                                                       batch_loss, memory_use,
+                                                                                       save_path,
+                                                                                       config)
                 else:
-                    order_index = list(query_ratio.keys())
-                    random.shuffle(order_index)
-                # for q_r_sorted in sorted(query_ratio.keys(), reverse=True):
-                for q_r_sorted in order_index:
-                    # if query_ratio[q_r_sorted] == [0]:
-                    #     continue
-                    for agent_idx in query_ratio[q_r_sorted]:
+                    for agent_idx in range(len(agent_training_order[agent_order])):
                         if agent_idx == 0:
                             continue
                         save_path, _, _, _ = continue_training_with_handover_query(options, agent_names, agent_training_order, agent_order, agent_idx,
@@ -1509,14 +1517,14 @@ if __name__ == '__main__':
     options = read_options("test_multi_agent_" + time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time())))
 
     if options['distributed_training']:
-        # agent_names = ['agent_1', 'agent_2', 'agent_3']
-        agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
+        agent_names = ['agent_1', 'agent_2', 'agent_3','agent_4']
+        # agent_names = ['agent_1', 'agent_2', 'agent_3', 'agent_4', 'agent_5', 'agent_6', 'agent_7', 'agent_8']
         # agent_names = ['agent_1', 'agent_5', 'agent_6', 'agent_8', 'agent_7', 'agent_2', 'agent_4', 'agent_3']
     else:
         agent_names = ['agent_full']
 
     data_splitter = DataDistributor()
-    # data_splitter.split(options, agent_names)
+    #data_splitter.split(options, agent_names)
 
     # Set logging
     logger.setLevel(logging.WARNING)
@@ -1576,8 +1584,6 @@ if __name__ == '__main__':
     # for k_, v_ in agent_training_non_coo.items():
     #     print(k_, ":", v_)
 
-
-
     agent_training_order = {
     #     # 1: [1, 2, 3, 4], # 头部+后续合作的
     #     # 2: [2, 1, 3, 4],
@@ -1595,14 +1601,18 @@ if __name__ == '__main__':
     #     6: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑3个合作的，其余为不合作的，跑第二次 如 [2, 1, 5, 6] [3, 4, 7, 8]
     #     7: [2, 1, 3, 4, 5, 6, 7, 8],  # 2后随机挑4个合作的，其余为不合作的，跑第一次 如 [2, 1, 3 ,4, 5] [6, 7, 8]
     #     8: [2, 1, 3, 4, 5, 6, 7, 8]   # 2后随机挑4个合作的，其余为不合作的，跑第二次 如 [2, 3, 5, 7, 8] [1, 4, 6]
-        1: [1, 2, 3, 4, 5, 6, 7, 8],
-        2: [2, 1, 3, 4, 5, 6, 7, 8],
-        3: [3, 1, 2, 4, 5, 6, 7, 8],
-        4: [4, 1, 2, 3, 5, 6, 7, 8],
-        5: [5, 1, 2, 3, 4, 6, 7, 8],
-        6: [6, 1, 2, 3, 4, 5, 7, 8],
-        7: [7, 1, 2, 3, 4, 5, 6, 8],
-        8: [8, 1, 2, 3, 4, 5, 6, 7]
+    1: [1, 3, 4, 2],
+    #2: [2, 1, 3, 4],
+    #3: [3, 2, 1, 4],
+    #4: [4, 1, 2, 3],
+    #    1: [1, 2, 3, 4, 5, 6, 7, 8],
+    #    2: [2, 1, 3, 4, 5, 6, 7, 8],
+    #    3: [3, 2, 1, 4, 5, 6, 7, 8],
+    #    4: [4, 1, 2, 3, 5, 6, 7, 8],
+    #    5: [5, 1, 2, 3, 4, 6, 7, 8],
+    #    6: [6, 1, 2, 3, 4, 5, 7, 8],
+    #    7: [7, 1, 2, 3, 4, 5, 6, 8],
+    #    8: [8, 1, 2, 3, 4, 5, 6, 7]
     }
     #
     # agent_training_non_coo = {
@@ -1770,7 +1780,7 @@ if __name__ == '__main__':
         # agent_training_non_coo 不合作的agent节点
         if options['transferred_training']:
             order_and_header_loop = [
-                {"order_type":"sort", "reused_header":True}, # 模拟新的复用打头agent训练的模型
+                #{"order_type":"sort", "reused_header":True}, # 模拟新的复用打头agent训练的模型
                 {"order_type":"shuffle", "reused_header":True}, # 模拟新的复用打头agent训练的模型
                 # 以上建议是两个实验成一组，前者序列要额外保存一份header model 供后者序列打头载入使用
                 # reused_header判定后逻辑处理，reused_header_map中没有就要训练并保存，有就直接取，不训练

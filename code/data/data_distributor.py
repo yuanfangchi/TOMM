@@ -23,7 +23,7 @@ class DataDistributor:
         #    self.split_grapher_triple_abs_relation(params, agent_names)
         else:
             self.split_grapher_triple(params, agent_names)
-        self.split_batcher_triple_from_graph(params, agent_names)
+        self.split_batcher_triple(params, agent_names)
         #self.split_batcher_aa_triple(params, agent_names)
 
         # self.create_vocab(params, agent_names)
@@ -39,6 +39,24 @@ class DataDistributor:
 
     def get_grapher_relation_per_count(self):
         return self.agent_relation_vocab
+
+    def analyze_grapher_triple(self, params, agent_names):
+        for agent in agent_names:
+            self.agent_entity_vocab[agent] = []
+            self.agent_relation_vocab[agent] = []
+            with open(params['data_input_dir'] + '/' + 'graph_' + agent + '.txt') as triple_file_raw:
+                triple_file = list(csv.reader(triple_file_raw, delimiter='\t'))
+                for i in range(len(triple_file)):
+                    if not triple_file[i][0] in self.agent_entity_vocab[agent]:
+                        self.agent_entity_vocab[agent].append(triple_file[i][0])
+                    if not triple_file[i][1] in self.agent_relation_vocab[agent]:
+                        self.agent_relation_vocab[agent].append(triple_file[i][1])
+                    if not triple_file[i][2] in self.agent_entity_vocab[agent]:
+                        self.agent_entity_vocab[agent].append(triple_file[i][2])
+            print(agent)
+            print(len(triple_file))
+            print(len(self.agent_entity_vocab[agent]))
+            print(len(self.agent_relation_vocab[agent]))
 
     def split_grapher_triple(self, params, agent_names):
         with open(params['data_input_dir'] + '/' + 'graph.txt') as triple_file_raw:

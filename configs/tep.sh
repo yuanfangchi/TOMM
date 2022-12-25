@@ -2,7 +2,7 @@
 
 data_input_dir="datasets/data_preprocessed/tep/"
 vocab_dir="datasets/data_preprocessed/tep/vocab"
-total_iterations=2000
+total_iterations=300
 path_length=3
 hidden_size=2
 embedding_size=2
